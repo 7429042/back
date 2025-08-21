@@ -1,0 +1,45 @@
+# HTTP
+
+@host = http://localhost:3000/api
+@json = application/json
+
+### Health-проверка (опционально)
+GET {{host}}/health
+
+### Создать корневую категорию: ДПО
+POST {{host}}/categories
+Content-Type: {{json}}
+
+{
+  "name": "ДПО",
+  "slug": "dpo"
+}
+
+### Создать подкатегорию: Повышение квалификации (родитель: dpo)
+POST {{host}}/categories
+Content-Type: {{json}}
+
+{
+  "name": "Повышение квалификации",
+  "slug": "pk",
+  "parentSlug": "dpo"
+}
+
+### Создать вложенную категорию: Пожарная безопасность (родитель: pk)
+POST {{host}}/categories
+Content-Type: {{json}}
+
+{
+  "name": "Пожарная безопасность",
+  "slug": "pozharnaya-bezopasnost",
+  "parentSlug": "pk"
+}
+
+### Получить id категории "pk" и всех её потомков
+GET {{host}}/categories/pk/ids
+
+### Получить id категории "pozharnaya-bezopasnost" (только она)
+GET {{host}}/categories/pozharnaya-bezopasnost/ids
+
+### Негативный тест: несуществующая категория -> ожидаем 404
+GET {{host}}/categories/ne-sushestvuet/ids

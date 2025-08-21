@@ -1,0 +1,22 @@
+# HTTP
+
+@host = http://localhost:3000/api
+@json = application/json
+
+### Создать черновик (возвращает { "id": "..." })
+POST {{host}}/programs/draft
+Content-Type: {{json}}
+
+{}
+
+### Список всех программ (по createdAt убыв.)
+GET {{host}}/programs
+
+### Только черновики
+GET {{host}}/programs?status=draft
+
+### Сортировка по популярности (views)
+GET {{host}}/programs?sortByViews=true
+
+### Пагинация
+GET {{host}}/programs?limit=10&offset=0
