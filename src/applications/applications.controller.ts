@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -11,6 +12,7 @@ import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { AuthGuard } from '@nestjs/passport';
 import { JwtPayload } from '../auth/jwt.strategy';
+import { UpdateApplicationStatusDto } from './dto/update-application-status.dto';
 
 @Controller('applications')
 export class ApplicationsController {
@@ -29,5 +31,13 @@ export class ApplicationsController {
   @Get('user/:userId')
   async findByUser(@Param('userId') userId: string) {
     return this.applicationsService.findByUser(userId);
+  }
+
+  @Patch(':id/status')
+  async updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateApplicationStatusDto,
+  ) {
+    return this.applicationsService.updateStatus(id, dto.status);
   }
 }

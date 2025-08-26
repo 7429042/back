@@ -24,6 +24,10 @@ export class ProgramItemDto {
   @IsInt()
   @Min(1)
   quantity?: number;
+
+  @IsOptional()
+  @IsDateString()
+  startDate?: string;
 }
 
 export class CreateApplicationDto {

@@ -31,6 +31,12 @@ export class ApplicationItem {
 
   @Prop({ type: String })
   titleAtApplication?: string;
+
+  @Prop({ type: Date, required: false })
+  startDate?: Date;
+
+  @Prop({ type: Date, required: false })
+  endDate?: Date;
 }
 
 export const ApplicationItemSchema =
