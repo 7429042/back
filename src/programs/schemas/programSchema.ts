@@ -3,7 +3,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 export type ProgramDocument = HydratedDocument<Program>;
 
-export type ProgramStatus = 'draft' | 'published'
+export type ProgramStatus = 'draft' | 'published';
 
 @Schema({ timestamps: true })
 export class Program {
@@ -31,13 +31,18 @@ export class Program {
   @Prop({ required: false, trim: true })
   completionDocument?: string;
 
-  @Prop({ required: true, enum: ['draft', 'published'], default: 'draft', index: true })
+  @Prop({
+    required: true,
+    enum: ['draft', 'published'],
+    default: 'draft',
+    index: true,
+  })
   status: ProgramStatus;
 }
 
 export const ProgramSchema = SchemaFactory.createForClass(Program);
 
-ProgramSchema.pre('save', function(next) {
+ProgramSchema.pre('save', function (next) {
   const doc = this as unknown as Program;
   if (doc.categoryType === 'dpo') {
     if (doc.dpoSubcategory === 'pk') {
@@ -47,8 +52,9 @@ ProgramSchema.pre('save', function(next) {
     } else {
       doc.completionDocument = undefined;
     }
-  } else if(doc.categoryType === 'prof_training') {
-    doc.completionDocument = 'Свидетельство о профессии рабочего / должности служащего'
+  } else if (doc.categoryType === 'prof_training') {
+    doc.completionDocument =
+      'Свидетельство о профессии рабочего / должности служащего';
   } else {
     doc.completionDocument = undefined;
   }

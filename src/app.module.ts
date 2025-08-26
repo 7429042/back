@@ -4,10 +4,12 @@ import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { HealthModule } from './health/health.module';
-import { HealthController } from './health/health.controller';
 import { MongoConnectionLogger } from './common/logging/mongo-connection.logger';
 import { CategoriesModule } from './categories/categories.module';
 import { ProgramsModule } from './programs/programs.module';
+import { UsersModule } from './users/users.module';
+import { ApplicationsModule } from './applications/applications.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -24,9 +26,11 @@ import { ProgramsModule } from './programs/programs.module';
     HealthModule,
     CategoriesModule,
     ProgramsModule,
+    UsersModule,
+    ApplicationsModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService, MongoConnectionLogger],
 })
-export class AppModule {
-}
+export class AppModule {}

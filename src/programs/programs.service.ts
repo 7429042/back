@@ -5,8 +5,10 @@ import { Program, ProgramDocument } from './schemas/programSchema';
 
 @Injectable()
 export class ProgramsService {
-  constructor(@InjectModel(Program.name) private readonly programModel: Model<ProgramDocument>) {
-  }
+  constructor(
+    @InjectModel(Program.name)
+    private readonly programModel: Model<ProgramDocument>,
+  ) {}
 
   async createDraft(): Promise<{ id: string }> {
     const doc = await this.programModel.create({ status: 'draft' });
