@@ -1,9 +1,17 @@
-import { Controller, Get, Post, Query } from '@nestjs/common';
+import { Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ProgramsService } from './programs.service';
+import { FindProgramsQueryDto } from './dto/find-programs-query.dto';
+import { CategoriesService } from '../categories/categories.service';
+import { Types } from 'mongoose';
+import { ParamIdDto } from '../common/dto/param-id.dto';
+import { GetProgramQueryDto } from './dto/get-program-query.dto';
 
 @Controller('programs')
 export class ProgramsController {
-  constructor(private readonly programsService: ProgramsService) {}
+  constructor(
+    private readonly programsService: ProgramsService,
+    private readonly categoriesService: CategoriesService,
+  ) {}
 
   @Post('draft')
   createDraft() {
@@ -11,17 +19,28 @@ export class ProgramsController {
   }
 
   @Get()
-  findAll(
-    @Query('status') status?: 'draft' | 'published',
-    @Query('sortByViews') sortByViews?: string,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-  ) {
+  async findAll(@Query() query: FindProgramsQueryDto) {
+    let categoryIds: Types.ObjectId[] | undefined = undefined;
+    if (query.categorySlug) {
+      categoryIds =
+        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+          query.categorySlug,
+        );
+    }
     return this.programsService.findAll({
-      status,
-      sortByViews: sortByViews === 'true',
-      limit: limit ? Number(limit) : undefined,
-      offset: offset ? Number(offset) : undefined,
+      status: query.status,
+      sortByViews: query.sortByViews,
+      limit: query.limit,
+      offset: query.offset,
+      categoryIds,
     });
+  }
+
+  async findById(
+    @Param() params: ParamIdDto,
+    @Query() query: GetProgramQueryDto,
+  ) {
+    const incrementView = query.incrementView ?? true;
+    return this.programsService.findById(params.id, { incrementView });
   }
 }

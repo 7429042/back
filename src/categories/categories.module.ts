@@ -8,13 +8,13 @@ import { Category, CategorySchema } from './schemas/category.schema';
   imports: [
     MongooseModule.forFeature([
       {
-      name: Category.name,
-      schema: CategorySchema,
-    },
+        name: Category.name,
+        schema: CategorySchema,
+      },
     ]),
   ],
   controllers: [CategoriesController],
   providers: [CategoriesService],
+  exports: [CategoriesService],
 })
-export class CategoriesModule {
-}
+export class CategoriesModule {}
