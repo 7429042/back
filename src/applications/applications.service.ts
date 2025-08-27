@@ -13,7 +13,8 @@ import {
 import { Model, Types } from 'mongoose';
 import { Program, ProgramDocument } from '../programs/schemas/programSchema';
 import { CreateApplicationDto } from './dto/create-application.dto';
-import { canTransition } from './status.transitions';
+import { canTransition, STATUS_TRANSITIONS } from './status.transitions';
+import { GetUserApplicationQueryDto } from './dto/get-user-application-query.dto';
 
 @Injectable()
 export class ApplicationsService {
@@ -78,6 +79,10 @@ export class ApplicationsService {
 
       if (i.startDate) {
         const start = new Date(i.startDate);
+        const now = new Date();
+        if (start.getTime() < now.getTime()) {
+          throw new BadRequestException('Start date must be in the future');
+        }
         item.startDate = start;
 
         if ((meta.hours ?? 0) > 0) {
@@ -97,12 +102,48 @@ export class ApplicationsService {
     });
   }
 
-  async findByUser(userId: string) {
-    return this.applicationModel
-      .find({ user: new Types.ObjectId(userId) })
-      .sort({ createdAt: -1 })
-      .lean()
-      .exec();
+  async findByUser(userId: string, query: GetUserApplicationQueryDto) {
+    const userObjectId = new Types.ObjectId(userId);
+    const offset = query?.offset ?? 0;
+    const limit = query?.limit ?? 20;
+    const sortBy = query?.sortBy ?? 'createdAt';
+    const sortDirection = query?.sortDirection ?? -1;
+
+    const [items, total] = await Promise.all([
+      this.applicationModel
+        .find({ user: userObjectId })
+        .sort({ [sortBy]: sortDirection })
+        .skip(offset)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.applicationModel.countDocuments({ user: userObjectId }).exec(),
+    ]);
+    return {
+      data: items,
+      meta: {
+        total,
+        offset,
+        limit,
+        sortBy,
+        sortDirection,
+      },
+    };
+  }
+
+  async findOneById(applicationId: string, withProgram = false) {
+    const query = this.applicationModel.findById(applicationId);
+    if (withProgram) {
+      query.populate({
+        path: 'items.program',
+        select: { title: 1, hours: 1 },
+      });
+    }
+    const app = await query.lean().exec();
+    if (!app) {
+      throw new NotFoundException('Application not found');
+    }
+    return app;
   }
 
   private onlyDigits(value: string) {
@@ -123,6 +164,72 @@ export class ApplicationsService {
       );
 
     app.status = nextStatus;
+    await app.save();
+
+    const allowedNext = STATUS_TRANSITIONS[app.status] ?? [];
+    return {
+      id: String(app._id),
+      status: app.status,
+      allowedNext,
+    };
+  }
+
+  async updateItemStartDate(
+    applicationId: string,
+    itemId: string,
+    startDateIso: string,
+  ) {
+    const app = await this.applicationModel.findById(applicationId).exec();
+    if (!app) {
+      throw new NotFoundException('Application not found');
+    }
+
+    const idx = app.items.findIndex((it) => String(it?._id) === itemId);
+    if (idx === -1) {
+      throw new BadRequestException('Item not found');
+    }
+
+    const item = app.items[idx];
+
+    const startDate = new Date(startDateIso);
+
+    if (isNaN(startDate.getTime())) {
+      throw new BadRequestException('Invalid start date');
+    }
+
+    const programId = item.program as unknown as Types.ObjectId;
+    const program = await this.programModel
+      .findById(programId, { hours: 1 })
+      .lean()
+      .exec();
+
+    if (!program) {
+      throw new BadRequestException('Program not found');
+    }
+
+    item.startDate = startDate;
+    if ((program.hours ?? 0) > 0) {
+      item.endDate = this.addHours(startDate, program.hours!);
+    } else {
+      item.endDate = undefined;
+    }
+    await app.save();
+    return app.toObject();
+  }
+
+  async clearItemDates(applicationId: string, itemId: string) {
+    const app = await this.applicationModel.findById(applicationId).exec();
+    if (!app) {
+      throw new NotFoundException('Application not found');
+    }
+
+    const idx = app.items.findIndex((it) => String(it?._id) === itemId);
+    if (idx === -1) {
+      throw new BadRequestException('Item not found');
+    }
+
+    app.items[idx].startDate = undefined;
+    app.items[idx].endDate = undefined;
     await app.save();
     return app.toObject();
   }

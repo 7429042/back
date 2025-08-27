@@ -18,8 +18,10 @@ export enum StatusType {
   REJECTED = 'rejected',
 }
 
-@Schema({ _id: false })
+@Schema()
 export class ApplicationItem {
+  _id?: Types.ObjectId;
+
   @Prop({ required: true, type: Types.ObjectId, ref: 'Program', index: true })
   program: Types.ObjectId;
 
