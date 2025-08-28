@@ -21,7 +21,6 @@ export class MongoConnectionLogger {
       this.logger.log('Mongo connection is open (ready for operations)');
     });
 
-    // @ts-ignore — некоторые драйверы эмитят 'reconnected'
     this.connection.on('reconnected', () => {
       this.logger.warn('Mongo reconnected');
     });
@@ -34,24 +33,24 @@ export class MongoConnectionLogger {
       this.logger.warn('Mongo connection closed');
     });
 
-    this.connection.on('error', (err) => {
-      this.logger.error(`Mongo connection error: ${err?.message || err}`);
+    this.connection.on('error', (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Mongo connection error: ${msg}`);
     });
   }
 
   private logCurrentState(context: string) {
-    const state = this.connection.readyState; // 0,1,2,3
-    const stateText =
-      state === 1
-        ? 'connected'
-        : state === 2
-          ? 'connecting'
-          : state === 3
-            ? 'disconnecting'
-            : 'disconnected';
+    const stateNum = Number(this.connection.readyState); // 0,1,2,3
+    const stateTextMap: Record<number, string> = {
+      0: 'disconnected',
+      1: 'connected',
+      2: 'connecting',
+      3: 'disconnecting',
+    };
+    const stateText = stateTextMap[stateNum] || 'unknown';
 
     this.logger.log(
-      `Mongo state at ${context}: ${stateText} (readyState=${state})`,
+      `Mongo state at ${context}: ${stateText} (readyState=${stateNum})`,
     );
   }
 }

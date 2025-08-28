@@ -8,11 +8,11 @@ export class CategoriesController {
 
   @Post()
   create(@Body() dto: CreateCategoryDto) {
-    return this.categoriesService.create(dto)
+    return this.categoriesService.create(dto);
   }
 
   @Get(':slug/ids')
   getIdsWithDescendants(@Param('slug') slug: string) {
-    return this.categoriesService.collectCategoryAndDescendantsIdsBySlug(slug)
+    return this.categoriesService.collectCategoryAndDescendantsIdsBySlug(slug);
   }
 }
