@@ -3,7 +3,7 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 export type CategoryDocument = HydratedDocument<Category>;
 
-@Schema({ timestamps: true})
+@Schema({ timestamps: true })
 export class Category {
   @Prop({ required: true, trim: true })
   name: string;

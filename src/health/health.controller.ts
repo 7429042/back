@@ -1,18 +1,26 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 
-
 @Controller('health')
 export class HealthController {
-  constructor(@InjectConnection() private readonly connection: Connection) {
-  }
+  constructor(@InjectConnection() private readonly connection: Connection) {}
 
   @Get()
   getHealth() {
-    const state = this.connection.readyState;
-    const mongo = state === 1 ? 'connected' : state === 2 ? 'connecting' : state === 3 ? 'disconnecting' : 'disconnected';
-    return { service: 'ok', mongo };
+    const state = Number(this.connection.readyState);
+    const mongo = new Map<number, string>([
+      [0, 'disconnected'],
+      [1, 'connected'],
+      [2, 'connecting'],
+      [3, 'disconnecting'],
+    ]);
+    return {
+      service: 'ok',
+      mongo: {
+        state,
+        status: mongo.get(state) ?? 'unknown',
+      },
+    };
   }
-
 }
