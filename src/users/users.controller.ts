@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { LoginUserDto } from './dto/login-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UserId } from '../auth/user-id.decorator';
 
 @Controller('users')
 export class UsersController {
@@ -20,8 +21,7 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard)
   @Get('me')
-  async findById(@Req() req: Request & { user?: { sub: string } }) {
-    const userId = (req.user as { sub: string })?.sub;
+  async findById(@UserId() userId: string) {
     return this.usersService.findById(userId);
   }
 }

@@ -11,6 +11,7 @@ import {
 import { CartService } from './cart.service';
 import { AddItemDto } from './dto/add-item.dto';
 import { SetQuantityDto } from './dto/set-quantity.dto';
+import { UserId } from '../auth/user-id.decorator';
 
 @Controller('cart')
 export class CartController {
@@ -22,33 +23,30 @@ export class CartController {
   }
 
   @Post('items')
-  async addItem(
-    @Req() req: Request & { user?: { sub: string } },
-    @Body() dto: AddItemDto,
-  ) {
+  async addItem(@UserId() userId: string, @Body() dto: AddItemDto) {
     const qty = dto.quantity ?? 1;
-    return this.cartService.addItem(req.user!.sub, dto.programId, qty);
+    return this.cartService.addItem(userId, dto.programId, qty);
   }
 
   @Patch('items/:programId')
   async setQuantity(
-    @Req() req: Request & { user?: { sub: string } },
+    @UserId() userId: string,
     @Param('programId') programId: string,
     @Body() dto: SetQuantityDto,
   ) {
-    return this.cartService.setQuantity(req.user!.sub, programId, dto.quantity);
+    return this.cartService.setQuantity(userId, programId, dto.quantity);
   }
 
   @Delete('items/:programId')
   async removeItem(
-    @Req() req: Request & { user?: { sub: string } },
+    @UserId() userId: string,
     @Param('programId') programId: string,
   ) {
-    return this.cartService.removeItem(req.user!.sub, programId);
+    return this.cartService.removeItem(userId, programId);
   }
 
   @Delete()
-  async clear(@Req() req: Request & { user?: { sub: string } }) {
-    return this.cartService.clear(req.user!.sub);
+  async clear(@UserId() userId: string) {
+    return this.cartService.clear(userId);
   }
 }

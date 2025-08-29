@@ -6,17 +6,16 @@ import {
   Patch,
   Post,
   Query,
-  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
-import { AuthGuard } from '@nestjs/passport';
-import { JwtPayload } from '../auth/jwt.strategy';
 import { UpdateApplicationStatusDto } from './dto/update-application-status.dto';
 import { AdminGuard } from '../auth/admin.guard';
 import { UpdateApplicationItemStartDateDto } from './dto/update-application-item-start-date.dto';
 import { GetUserApplicationQueryDto } from './dto/get-user-application-query.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UserId } from '../auth/user-id.decorator';
 
 @Controller('applications')
 export class ApplicationsController {
@@ -31,13 +30,9 @@ export class ApplicationsController {
     return this.applicationsService.findOneById(id, flag);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(JwtAuthGuard)
   @Post()
-  async create(
-    @Body() dto: CreateApplicationDto,
-    @Req() req: Request & { user: JwtPayload },
-  ) {
-    const userId = req.user.sub;
+  async create(@Body() dto: CreateApplicationDto, @UserId() userId: string) {
     return this.applicationsService.create({ ...dto, userId });
   }
 
@@ -49,7 +44,7 @@ export class ApplicationsController {
     return this.applicationsService.findByUser(userId, query);
   }
 
-  @UseGuards(AuthGuard('jwt'), AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/status')
   async updateStatus(
     @Param('id') id: string,
@@ -58,7 +53,7 @@ export class ApplicationsController {
     return this.applicationsService.updateStatus(id, dto.status);
   }
 
-  @UseGuards(AuthGuard('jwt'), AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/items/:itemId/start-date')
   async updateItemStartDate(
     @Param('id') id: string,
@@ -72,7 +67,7 @@ export class ApplicationsController {
     );
   }
 
-  @UseGuards(AuthGuard('jwt'), AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/items/:itemId/clear-dates')
   async clearItemDates(
     @Param('id') id: string,
