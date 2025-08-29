@@ -38,15 +38,6 @@ export class UsersService {
     }
   }
 
-  async findByEmail(email: string) {
-    const normalizedEmail = email.toLowerCase().trim();
-    return await this.userModel
-      .findOne({ email: normalizedEmail })
-      .select('-passwordHash')
-      .lean()
-      .exec();
-  }
-
   async login(dto: LoginUserDto) {
     const normalizedEmail = dto.email.toLowerCase().trim();
     const user = await this.userModel
@@ -68,5 +59,13 @@ export class UsersService {
     const obj = user.toObject();
     Reflect.deleteProperty(obj, 'passwordHash');
     return { accessToken, user: obj };
+  }
+
+  async findById(id: string) {
+    return await this.userModel
+      .findById(id)
+      .select('-passwordHash')
+      .lean()
+      .exec();
   }
 }

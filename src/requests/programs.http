@@ -2,10 +2,13 @@
 
 @host = http://localhost:3000/api
 @json = application/json
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OGIxN2NkZDI0N2ZmMzczZjFlM2MwZmEiLCJyb2xlIjoidXNlciIsImVtYWlsIjoidGVzdEB0ZXN0LnJ1IiwiaWF0IjoxNzU2NDYzODIwLCJleHAiOjE3NTY0Njc0MjB9.Fw24QqteXRt4vkfjXyN7kAOvM2svyi9nFlsPywZzPa8
+
 
 ### Создать черновик (возвращает { "id": "..." })
 POST {{host}}/programs/draft
 Content-Type: {{json}}
+Authorization: Bearer {{token}}
 
 {}
 

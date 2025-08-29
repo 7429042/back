@@ -15,18 +15,30 @@ import { Program, ProgramDocument } from '../programs/schemas/programSchema';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { canTransition, STATUS_TRANSITIONS } from './status.transitions';
 import { GetUserApplicationQueryDto } from './dto/get-user-application-query.dto';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class ApplicationsService {
+  private readonly hoursPerDay: number;
   constructor(
     @InjectModel(Application.name)
     private readonly applicationModel: Model<ApplicationDocument>,
     @InjectModel(Program.name)
     private readonly programModel: Model<ProgramDocument>,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    this.hoursPerDay = this.configService.get<number>('HOURS_PER_DAY', 8);
+  }
 
-  private addHours(date: Date, hours: number): Date {
-    return new Date(date.getTime() + hours * 60 * 60 * 1000);
+  private addDays(date: Date, days: number): Date {
+    const result = new Date(date.getTime());
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  private studyDaysByHours(hours: number): number {
+    const h = Math.max(0, hours || 0);
+    return Math.ceil(h / this.hoursPerDay);
   }
 
   async create(dto: CreateApplicationDto) {
@@ -67,6 +79,8 @@ export class ApplicationsService {
       );
     }
 
+    const now = new Date();
+
     const items: ApplicationItem[] = dto.items.map((i) => {
       const meta = byId.get(i.programId)!;
       const quantity = i.quantity ?? 1;
@@ -77,17 +91,24 @@ export class ApplicationsService {
         titleAtApplication: meta.title,
       } as ApplicationItem;
 
+      const programHours = meta.hours ?? 0;
+      const days = this.studyDaysByHours(programHours);
+
       if (i.startDate) {
         const start = new Date(i.startDate);
-        const now = new Date();
-        if (start.getTime() < now.getTime()) {
+        if (isNaN(start.getTime())) {
+          throw new BadRequestException('Invalid start date');
+        }
+        const minStart = now.getTime();
+        if (start.getTime() < minStart) {
           throw new BadRequestException('Start date must be in the future');
         }
         item.startDate = start;
-
-        if ((meta.hours ?? 0) > 0) {
-          item.endDate = this.addHours(start, meta.hours!);
+        if (days > 0) {
+          item.endDate = this.addDays(start, days);
         }
+      } else if (days > 0) {
+        item.endDate = this.addDays(now, days);
       }
       return item;
     });
@@ -207,9 +228,10 @@ export class ApplicationsService {
       throw new BadRequestException('Program not found');
     }
 
+    const days = this.studyDaysByHours(program.hours ?? 0);
     item.startDate = startDate;
-    if ((program.hours ?? 0) > 0) {
-      item.endDate = this.addHours(startDate, program.hours!);
+    if (days > 0) {
+      item.endDate = this.addDays(startDate, days);
     } else {
       item.endDate = undefined;
     }

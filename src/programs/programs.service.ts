@@ -6,6 +6,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { Program, ProgramDocument } from './schemas/programSchema';
+import slugify from '@sindresorhus/slugify';
 
 @Injectable()
 export class ProgramsService {
@@ -13,6 +14,19 @@ export class ProgramsService {
     @InjectModel(Program.name)
     private readonly programModel: Model<ProgramDocument>,
   ) {}
+
+  private normalizeSlug(input: string) {
+    return slugify(input, { separator: '-', lowercase: true });
+  }
+
+  private async ensureUniqueSlug(slug: string) {
+    let candidate = slug;
+    let i = 2;
+    while (await this.programModel.exists({ slug: candidate })) {
+      candidate = `${slug}-${i++}`;
+    }
+    return candidate;
+  }
 
   async createDraft(): Promise<{ id: string }> {
     const doc = await this.programModel.create({ status: 'draft' });
@@ -49,7 +63,7 @@ export class ProgramsService {
       query.skip(params.offset);
     }
 
-    return query.exec();
+    return query.lean().exec();
   }
 
   async findOneById(
@@ -70,6 +84,19 @@ export class ProgramsService {
           .exec()
       : await this.programModel.findById(id).exec();
 
+    if (!doc) {
+      throw new NotFoundException('Program not found');
+    }
+    return doc;
+  }
+
+  async findOneBySlug(slug: string, options?: { incrementView?: boolean }) {
+    const incrementView = options?.incrementView ?? true;
+    const normalized = this.normalizeSlug(slug);
+
+    const doc = incrementView
+      ? await this.programModel.findByIdAndUpdate({ slug: normalized }).exec()
+      : await this.programModel.findOne({ slug: normalized }).exec();
     if (!doc) {
       throw new NotFoundException('Program not found');
     }
@@ -110,6 +137,10 @@ export class ProgramsService {
         `Cannot publish program: ${errors.join(', ')}`,
       );
     }
+    if (!doc.slug || !doc.slug.trim()) {
+      const base = this.normalizeSlug(doc.title!);
+      doc.slug = await this.ensureUniqueSlug(base);
+    }
 
     doc.status = 'published';
     await doc.save();
@@ -144,6 +175,12 @@ export class ProgramsService {
     }
     if (typeof updates.title !== 'undefined') {
       doc.title = updates.title;
+      if (updates.title && updates.title.trim()) {
+        const base = this.normalizeSlug(updates.title);
+        doc.slug = await this.ensureUniqueSlug(base);
+      } else {
+        doc.slug = undefined;
+      }
     }
     if (typeof updates.description !== 'undefined') {
       doc.description = updates.description;

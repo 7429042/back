@@ -14,9 +14,9 @@ import { CategoriesService } from '../categories/categories.service';
 import { Types } from 'mongoose';
 import { ParamIdDto } from '../common/dto/param-id.dto';
 import { GetProgramQueryDto } from './dto/get-program-query.dto';
-import { AuthGuard } from '@nestjs/passport';
 import { AdminGuard } from '../auth/admin.guard';
 import { UpdateProgramDto } from './dto/update-program.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 @Controller('programs')
 export class ProgramsController {
@@ -25,6 +25,7 @@ export class ProgramsController {
     private readonly categoriesService: CategoriesService,
   ) {}
 
+  @UseGuards(JwtAuthGuard, AdminGuard)
   @Post('draft')
   createDraft() {
     return this.programsService.createDraft();
@@ -57,6 +58,17 @@ export class ProgramsController {
     return this.programsService.findOneById(params.id, { incrementView });
   }
 
+  @Get('slug/:slug')
+  async findOneBySlug(
+    @Param('slug') slug: string,
+    @Query() query: GetProgramQueryDto,
+  ) {
+    const incrementView = query.incrementView ?? true;
+    return this.programsService.findOneBySlug(slug, { incrementView });
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Patch(':id')
   async updateDraft(
     @Param() params: ParamIdDto,
     @Body() dto: UpdateProgramDto,
@@ -82,7 +94,7 @@ export class ProgramsController {
   }
 
   @Patch(':id/publish')
-  @UseGuards(AuthGuard('jwt'), AdminGuard)
+  @UseGuards(JwtAuthGuard, AdminGuard)
   async publish(@Param() params: ParamIdDto) {
     return this.programsService.publish(params.id);
   }

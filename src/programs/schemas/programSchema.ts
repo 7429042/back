@@ -32,6 +32,15 @@ export class Program {
   completionDocument?: string;
 
   @Prop({
+    trim: true,
+    lowercase: true,
+    unique: true,
+    index: true,
+    required: false,
+  })
+  slug?: string;
+
+  @Prop({
     required: true,
     enum: ['draft', 'published'],
     default: 'draft',
