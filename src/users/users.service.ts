@@ -5,11 +5,14 @@ import { Model } from 'mongoose';
 import { CreateUserDto } from './dto/create-user.dto';
 import { MongoServerError } from 'mongodb';
 import * as bcrypt from 'bcrypt';
+import { LoginUserDto } from './dto/login-user.dto';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    private jwtService: JwtService,
   ) {}
 
   async create(dto: CreateUserDto) {
@@ -35,16 +38,34 @@ export class UsersService {
     }
   }
 
+  async login(dto: LoginUserDto) {
+    const normalizedEmail = dto.email.toLowerCase().trim();
+    const user = await this.userModel
+      .findOne({ email: normalizedEmail })
+      .exec();
+    if (!user) {
+      throw new BadRequestException('Invalid email or password');
+    }
+    const isMatch = await bcrypt.compare(dto.password, user.passwordHash);
+    if (!isMatch) {
+      throw new BadRequestException('Invalid email or password');
+    }
+    const payload = {
+      sub: user._id.toString(),
+      role: user.role,
+      email: user.email,
+    };
+    const accessToken = this.jwtService.sign(payload);
+    const obj = user.toObject();
+    Reflect.deleteProperty(obj, 'passwordHash');
+    return { accessToken, user: obj };
+  }
+
   async findById(id: string) {
     return await this.userModel
       .findById(id)
       .select('-passwordHash')
       .lean()
       .exec();
-  }
-
-  async findByEmail(email: string) {
-    const normalized = email.toLowerCase().trim();
-    return this.userModel.findOne({ email: normalized }).exec();
   }
 }
