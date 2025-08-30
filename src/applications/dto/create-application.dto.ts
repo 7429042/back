@@ -31,9 +31,6 @@ export class ProgramItemDto {
 }
 
 export class CreateApplicationDto {
-  @IsMongoId()
-  userId: string;
-
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })

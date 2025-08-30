@@ -33,7 +33,7 @@ export class ApplicationsController {
   @UseGuards(JwtAuthGuard)
   @Post()
   async create(@Body() dto: CreateApplicationDto, @UserId() userId: string) {
-    return this.applicationsService.create({ ...dto, userId });
+    return this.applicationsService.create(dto, userId);
   }
 
   @Get('user/:userId')
