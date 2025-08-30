@@ -11,7 +11,7 @@ import { UsersModule } from './users/users.module';
 import { ApplicationsModule } from './applications/applications.module';
 import { AuthModule } from './auth/auth.module';
 import { CartModule } from './cart/cart.module';
-import Joi from 'joi';
+import * as Joi from 'joi';
 
 @Module({
   imports: [
@@ -23,6 +23,8 @@ import Joi from 'joi';
         MONGODB_URI: Joi.string().required(),
         JWT_SECRET: Joi.string().min(16).required(),
         JWT_EXPIRES_IN: Joi.string().required(),
+        JWT_REFRESH_SECRET: Joi.string().min(16).required(),
+        JWT_REFRESH_EXPIRES_IN: Joi.string().default('30d'),
         HOURS_PER_DAY: Joi.number().integer().min(1).max(24).default(8),
       }),
     }),

@@ -30,18 +30,7 @@ export class ApplicationsService {
     this.hoursPerDay = this.configService.get<number>('HOURS_PER_DAY', 8);
   }
 
-  private addDays(date: Date, days: number): Date {
-    const result = new Date(date.getTime());
-    result.setDate(result.getDate() + days);
-    return result;
-  }
-
-  private studyDaysByHours(hours: number): number {
-    const h = Math.max(0, hours || 0);
-    return Math.ceil(h / this.hoursPerDay);
-  }
-
-  async create(dto: CreateApplicationDto) {
+  async create(dto: CreateApplicationDto, userId: string) {
     if (!dto.items.length) {
       throw new BadRequestException('Items must not be empty');
     }
@@ -113,7 +102,7 @@ export class ApplicationsService {
       return item;
     });
     return await this.applicationModel.create({
-      user: new Types.ObjectId(dto.userId),
+      user: new Types.ObjectId(userId),
       items,
       snils: snilsDigits,
       inn: innDigits,
@@ -165,10 +154,6 @@ export class ApplicationsService {
       throw new NotFoundException('Application not found');
     }
     return app;
-  }
-
-  private onlyDigits(value: string) {
-    return value.replace(/\D+/g, '');
   }
 
   async updateStatus(applicationId: string, nextStatus: StatusType) {
@@ -254,5 +239,20 @@ export class ApplicationsService {
     app.items[idx].endDate = undefined;
     await app.save();
     return app.toObject();
+  }
+
+  private addDays(date: Date, days: number): Date {
+    const result = new Date(date.getTime());
+    result.setDate(result.getDate() + days);
+    return result;
+  }
+
+  private studyDaysByHours(hours: number): number {
+    const h = Math.max(0, hours || 0);
+    return Math.ceil(h / this.hoursPerDay);
+  }
+
+  private onlyDigits(value: string) {
+    return value.replace(/\D+/g, '');
   }
 }

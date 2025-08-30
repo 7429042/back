@@ -11,7 +11,7 @@ GET {{URL}}/users/by-email?email=test@test.ru
 Accept: application/json
 
 ###
-POST {{URL}}/users/login
+POST {{URL}}/auth/login
 Content-Type: application/json
 
 {
