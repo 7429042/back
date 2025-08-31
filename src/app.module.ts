@@ -26,6 +26,18 @@ import * as Joi from 'joi';
         JWT_REFRESH_SECRET: Joi.string().min(16).required(),
         JWT_REFRESH_EXPIRES_IN: Joi.string().default('30d'),
         HOURS_PER_DAY: Joi.number().integer().min(1).max(24).default(8),
+        ADMIN_EMAIL: Joi.string().email().optional(),
+        ADMIN_PASSWORD: Joi.string().min(8).optional(),
+        ADMIN_FIRST_NAME: Joi.string().optional(),
+        ADMIN_LAST_NAME: Joi.string().optional(),
+        CORS_ORIGIN: Joi.alternatives()
+          .try(Joi.string(), Joi.boolean())
+          .optional(),
+        COOKIE_DOMAIN: Joi.string().optional(),
+        COOKIE_SECURE: Joi.boolean().default(true),
+        COOKIE_SAMESITE: Joi.string()
+          .valid('strict', 'lax', 'none')
+          .default('lax'),
       }),
     }),
     MongooseModule.forRootAsync({

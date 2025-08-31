@@ -1,8 +1,21 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserId } from '../auth/user-id.decorator';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
+import { AdminGuard } from '../auth/admin.guard';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Controller('users')
 export class UsersController {
@@ -17,5 +30,29 @@ export class UsersController {
   @Get('me')
   async findById(@UserId() userId: string) {
     return this.usersService.findById(userId);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get()
+  async usersList(@Query() query: ListUsersQueryDto) {
+    return this.usersService.usersList(query);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get(':id')
+  async getUserById(@Param('id') id: string) {
+    return this.usersService.findById(id);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Patch(':id')
+  async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+    return this.usersService.updateByAdmin(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Delete(':id')
+  async deleteUser(@Param('id') id: string) {
+    return this.usersService.deleteByAdmin(id);
   }
 }
