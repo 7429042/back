@@ -2,7 +2,7 @@ POST {{URL}}/users
 Content-Type: application/json
 
 {
-  "email": "test@test.ru",
+  "email": "test1@test.ru",
   "password": "12345678"
 }
 
@@ -22,6 +22,16 @@ Content-Type: application/json
 ### LOGIN_ADMIN
 POST {{URL}}/auth/login
 Content-Type: application/json
+
+{
+  "email": "7429042@gmail.com",
+  "password": "a955927b"
+}
+
+### LOGOUT_ADMIN
+POST {{URL}}/auth/logout
+Content-Type: application/json
+Authorization: Bearer "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OGI0NGM3MGFhYzA1YjVmYzM4ZTViYTUiLCJlbWFpbCI6Ijc0MjkwNDJAZ21haWwuY29tIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzU2NjU3NDcwLCJleHAiOjE3NTY2NjEwNzB9.9ecJDMTJoMqNF_TwsgSVOTxL-gZuDIjLAiKNduMOWd8"
 
 {
   "email": "7429042@gmail.com",

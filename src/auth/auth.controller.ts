@@ -1,9 +1,11 @@
-import { Body, Controller, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginUserDto } from './dto/login-user.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { UserId } from './user-id.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -32,10 +34,13 @@ export class AuthController {
   @Post('login')
   async login(
     @Body() dto: LoginUserDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { user, accessToken, refreshToken } =
-      await this.authService.login(dto);
+    const { user, accessToken, refreshToken } = await this.authService.login(
+      dto,
+      { ip: req.ip, userAgent: req.headers['user-agent'] },
+    );
     res.cookie('refreshToken', refreshToken, this.getCookieOptions());
     return { user, accessToken };
   }
@@ -49,14 +54,31 @@ export class AuthController {
     const fromCookie =
       (req.cookies?.refreshToken as string | undefined) ?? null;
     const token = fromCookie ?? dto?.refreshToken;
-    const { accessToken, refreshToken } =
-      await this.authService.refreshToken(token);
+    const { accessToken, refreshToken } = await this.authService.refreshToken(
+      token,
+      { ip: req.ip, userAgent: req.headers['user-agent'] },
+    );
     res.cookie('refreshToken', refreshToken, this.getCookieOptions());
     return { accessToken };
   }
 
   @Post('logout')
-  async logout(@Res({ passthrough: true }) res: Response) {
+  async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const token =
+      (req.cookies?.refreshToken as string | undefined) ?? undefined;
+    await this.authService.logout(token);
+    res.clearCookie('refreshToken', { path: '/' });
+    return { success: true };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  async logoutAll(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @UserId() userId: string,
+  ) {
+    await this.authService.logoutAll(userId);
     res.clearCookie('refreshToken', { path: '/' });
     return { success: true };
   }

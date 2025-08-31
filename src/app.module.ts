@@ -38,6 +38,7 @@ import * as Joi from 'joi';
         COOKIE_SAMESITE: Joi.string()
           .valid('strict', 'lax', 'none')
           .default('lax'),
+        REFRESH_MAX_SESSIONS: Joi.number().integer().min(1).max(50).default(5),
       }),
     }),
     MongooseModule.forRootAsync({

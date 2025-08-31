@@ -6,6 +6,11 @@ import { JwtStrategy } from './jwt.strategy';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { UsersModule } from '../users/users.module';
+import { MongooseModule } from '@nestjs/mongoose';
+import {
+  RefreshSession,
+  RefreshSessionSchema,
+} from './schemas/refresh-session.schema';
 
 @Module({
   imports: [
@@ -26,6 +31,9 @@ import { UsersModule } from '../users/users.module';
         };
       },
     }),
+    MongooseModule.forFeature([
+      { name: RefreshSession.name, schema: RefreshSessionSchema },
+    ]),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
