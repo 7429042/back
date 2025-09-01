@@ -69,3 +69,5 @@ ProgramSchema.pre('save', function (next) {
   }
   next();
 });
+
+ProgramSchema.index({ title: 'text', description: 'text' });

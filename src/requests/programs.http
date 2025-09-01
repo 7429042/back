@@ -2,7 +2,7 @@
 
 @host = http://localhost:3000/api
 @json = application/json
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OGIxN2NkZDI0N2ZmMzczZjFlM2MwZmEiLCJyb2xlIjoidXNlciIsImVtYWlsIjoidGVzdEB0ZXN0LnJ1IiwiaWF0IjoxNzU2NDYzODIwLCJleHAiOjE3NTY0Njc0MjB9.Fw24QqteXRt4vkfjXyN7kAOvM2svyi9nFlsPywZzPa8
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2OGI1N2NjZTFhMTkxMTVhMmEyZWFlZTQiLCJlbWFpbCI6Ijc0MjkwNDJAZ21haWwuY29tIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzU2NzI0NDM4LCJleHAiOjE3NTY3MjgwMzh9.Upp3b68-Z0Eq4cQMI-X69ibMLmU51l7XK71GWBHhPlk
 
 
 ### Создать черновик (возвращает { "id": "..." })
@@ -23,3 +23,14 @@ GET {{host}}/programs?sortByViews=true
 
 ### Пагинация
 GET {{host}}/programs?limit=10&offset=0
+
+### Update Draft
+PATCH {{host}}/programs/68a6ed833eae0e171533889e
+Content-Type: {{json}}
+Authorization: Bearer {{token}}
+
+{
+    "title": "Lorem",
+    "description": "kjsfnkjnsvsdn,mdsvn,smdv",
+    "hours": 15
+}

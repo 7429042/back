@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -49,13 +50,28 @@ export class ProgramsController {
     });
   }
 
-  @Get(':id')
-  async findOneById(
-    @Param() params: ParamIdDto,
-    @Query() query: GetProgramQueryDto,
-  ) {
-    const incrementView = query.incrementView ?? true;
-    return this.programsService.findOneById(params.id, { incrementView });
+  @Get('search')
+  async search(@Query() query: FindProgramsQueryDto) {
+    let categoryIds: Types.ObjectId[] | undefined = undefined;
+    if (query.categorySlug) {
+      categoryIds =
+        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+          query.categorySlug,
+        );
+    }
+
+    const rawText: unknown = (query as Record<string, unknown>).text;
+    const safeText: string | undefined =
+      typeof rawText === 'string' ? rawText : undefined;
+
+    return this.programsService.findAllWithMeta({
+      status: query.status,
+      sortByViews: query.sortByViews,
+      limit: query.limit,
+      offset: query.offset,
+      categoryIds,
+      text: safeText,
+    });
   }
 
   @Get('slug/:slug')
@@ -65,6 +81,15 @@ export class ProgramsController {
   ) {
     const incrementView = query.incrementView ?? true;
     return this.programsService.findOneBySlug(slug, { incrementView });
+  }
+
+  @Get(':id')
+  async findOneById(
+    @Param() params: ParamIdDto,
+    @Query() query: GetProgramQueryDto,
+  ) {
+    const incrementView = query.incrementView ?? true;
+    return this.programsService.findOneById(params.id, { incrementView });
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
@@ -97,5 +122,11 @@ export class ProgramsController {
   @UseGuards(JwtAuthGuard, AdminGuard)
   async publish(@Param() params: ParamIdDto) {
     return this.programsService.publish(params.id);
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  async deleteDraft(@Param() params: ParamIdDto) {
+    return this.programsService.deleteDraft(params.id);
   }
 }

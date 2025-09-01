@@ -19,13 +19,23 @@ export class ProgramsService {
     return slugify(input, { separator: '-', lowercase: true });
   }
 
-  private async ensureUniqueSlug(slug: string) {
+  private async ensureUniqueSlug(slug: string, executedId: Types.ObjectId) {
     let candidate = slug;
     let i = 2;
-    while (await this.programModel.exists({ slug: candidate })) {
+    while (
+      await this.programModel.exists(
+        executedId
+          ? { slug: candidate, _id: { $ne: executedId } }
+          : { slug: candidate },
+      )
+    ) {
       candidate = `${slug}-${i++}`;
     }
     return candidate;
+  }
+
+  private escapeRegExp(input: string) {
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   async createDraft(): Promise<{ id: string }> {
@@ -66,6 +76,47 @@ export class ProgramsService {
     return query.lean().exec();
   }
 
+  async findAllWithMeta(params: {
+    status?: 'draft' | 'published';
+    sortByViews?: boolean;
+    limit?: number;
+    offset?: number;
+    categoryIds?: Types.ObjectId[];
+    text?: string;
+  }) {
+    const filter: FilterQuery<Program> = {};
+    if (params.status) filter.status = params.status;
+    if (params.categoryIds && params.categoryIds.length > 0)
+      filter.category = { $in: params.categoryIds };
+    if (params.text) {
+      const safe = new RegExp(this.escapeRegExp(params.text), 'i');
+      filter.$or = [{ title: safe }, { description: safe }];
+    }
+
+    const MAX_LIMIT = 100;
+    const limit = Math.min(Math.max(params.limit ?? 20, 1), MAX_LIMIT);
+    const offset = Math.max(params.offset ?? 0, 0);
+
+    const baseQuery = this.programModel.find(filter);
+    if (params.sortByViews) {
+      baseQuery.sort({ views: -1, createdAt: -1 });
+    } else {
+      baseQuery.sort({ createdAt: -1 });
+    }
+
+    const [items, total] = await Promise.all([
+      baseQuery.skip(offset).limit(limit).lean().exec(),
+      this.programModel.countDocuments(filter).exec(),
+    ]);
+
+    return {
+      items,
+      total,
+      limit,
+      offset,
+    };
+  }
+
   async findOneById(
     id: string,
     options?: {
@@ -95,7 +146,13 @@ export class ProgramsService {
     const normalized = this.normalizeSlug(slug);
 
     const doc = incrementView
-      ? await this.programModel.findByIdAndUpdate({ slug: normalized }).exec()
+      ? await this.programModel
+          .findOneAndUpdate(
+            { slug: normalized },
+            { $inc: { views: 1 } },
+            { new: true },
+          )
+          .exec()
       : await this.programModel.findOne({ slug: normalized }).exec();
     if (!doc) {
       throw new NotFoundException('Program not found');
@@ -139,7 +196,7 @@ export class ProgramsService {
     }
     if (!doc.slug || !doc.slug.trim()) {
       const base = this.normalizeSlug(doc.title!);
-      doc.slug = await this.ensureUniqueSlug(base);
+      doc.slug = await this.ensureUniqueSlug(base, doc._id);
     }
 
     doc.status = 'published';
@@ -177,7 +234,7 @@ export class ProgramsService {
       doc.title = updates.title;
       if (updates.title && updates.title.trim()) {
         const base = this.normalizeSlug(updates.title);
-        doc.slug = await this.ensureUniqueSlug(base);
+        doc.slug = await this.ensureUniqueSlug(base, doc._id);
       } else {
         doc.slug = undefined;
       }
@@ -199,5 +256,20 @@ export class ProgramsService {
     }
     await doc.save();
     return doc;
+  }
+
+  async deleteDraft(id: string) {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Program not found');
+    }
+    const doc = await this.programModel.findById(id).exec();
+    if (!doc) {
+      throw new NotFoundException('Program not found');
+    }
+    if (doc.status !== 'draft') {
+      throw new BadRequestException('Program is not in draft status');
+    }
+    await doc.deleteOne({ id: doc._id }).exec();
+    return { deleted: true };
   }
 }

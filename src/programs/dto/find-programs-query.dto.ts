@@ -36,4 +36,13 @@ export class FindProgramsQueryDto {
     typeof params.value === 'string' ? params.value.trim() : undefined,
   )
   categorySlug?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform((params: TransformFnParams) => {
+    if (typeof params.value !== 'string') return undefined;
+    const trimmed = params.value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  })
+  text?: string;
 }
