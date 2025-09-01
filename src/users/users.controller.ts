@@ -9,13 +9,15 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { UsersService } from './users.service';
+import { ChangePasswordResult, UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserId } from '../auth/user-id.decorator';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { AdminGuard } from '../auth/admin.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdatePasswordDto } from './dto/update-password.dto';
+import { UpdateUserBlockDto } from './dto/update-user-block.dto';
 
 @Controller('users')
 export class UsersController {
@@ -30,6 +32,19 @@ export class UsersController {
   @Get('me')
   async findById(@UserId() userId: string) {
     return this.usersService.findById(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('me/password')
+  async changeMyPassword(
+    @UserId() userId: string,
+    @Body() dto: UpdatePasswordDto,
+  ): Promise<ChangePasswordResult> {
+    return await this.usersService.changePassword(
+      userId,
+      dto.oldPassword,
+      dto.newPassword,
+    );
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
@@ -48,6 +63,12 @@ export class UsersController {
   @Patch(':id')
   async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.usersService.updateByAdmin(id, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Patch(':id/block')
+  async blockToggle(@Param('id') id: string, @Body() dto: UpdateUserBlockDto) {
+    return this.usersService.setBlockByAdmin(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)

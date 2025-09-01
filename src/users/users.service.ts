@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Injectable,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Role, User, UserDocument } from './schemas/userSchema';
 import { Model, Types } from 'mongoose';
@@ -8,13 +13,24 @@ import * as bcrypt from 'bcrypt';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
 import { ConfigService } from '@nestjs/config';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { AuthService } from '../auth/auth.service';
+import { UpdateUserBlockDto } from './dto/update-user-block.dto';
+
+export type ChangePasswordResult = { success: true; hint?: string };
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly configService: ConfigService,
+    @Inject(forwardRef(() => AuthService))
+    private readonly authService: AuthService,
   ) {}
+
+  private escapeRegExp(input: string): string {
+    // экранируем спецсимволы RegExp, чтобы не падать на пользовательском вводе
+    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
 
   async onModuleInit() {
     const email = this.configService.get<string>('ADMIN_EMAIL');
@@ -75,11 +91,52 @@ export class UsersService {
     return this.userModel.findOne({ email: normalized }).exec();
   }
 
+  async findAuthById(userId: string) {
+    return await this.userModel.findById(userId).exec();
+  }
+
+  async changePassword(
+    userId: string,
+    oldPassword: string,
+    newPassword: string,
+  ): Promise<ChangePasswordResult> {
+    const user = await this.findAuthById(userId);
+    if (!user) {
+      throw new BadRequestException('User not found');
+    }
+    const isMatch = await bcrypt.compare(oldPassword, user.passwordHash);
+    if (!isMatch) {
+      throw new BadRequestException('Old password is incorrect');
+    }
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    await user.save();
+    await this.authService.logoutAll(userId);
+    return { success: true };
+  }
+
   async usersList(query: ListUsersQueryDto) {
     const offset = query?.offset ?? 0;
     const limit = query?.limit ?? 20;
     const sortBy = query?.sortBy ?? 'createdAt';
     const sortDirection = query?.sortDirection ?? -1;
+
+    const where: Record<string, unknown> = {};
+    if (query?.role) {
+      where.role = query.role;
+    }
+    if (query?.isBlocked) {
+      where.isBlocked = query.isBlocked;
+    }
+
+    const q = query.q?.trim();
+    if (q && q.length >= 2) {
+      const needle = new RegExp(this.escapeRegExp(q), 'i');
+      where.$or = [
+        { email: needle },
+        { firstName: needle },
+        { lastName: needle },
+      ];
+    }
 
     const [items, total] = await Promise.all([
       this.userModel
@@ -89,7 +146,7 @@ export class UsersService {
         .limit(limit)
         .lean()
         .exec(),
-      this.userModel.countDocuments({}).exec(),
+      this.userModel.countDocuments(where).exec(),
     ]);
     return {
       data: items,
@@ -99,6 +156,12 @@ export class UsersService {
         limit,
         sortBy,
         sortDirection,
+        filters: {
+          role: query.role ?? null,
+          isBlocked:
+            typeof query.isBlocked === 'boolean' ? query.isBlocked : null,
+          q: q ?? null,
+        },
       },
     };
   }
@@ -157,6 +220,43 @@ export class UsersService {
 
     if (!updated) {
       throw new BadRequestException('User not found');
+    }
+    return updated;
+  }
+
+  async setBlockByAdmin(id: string, dto: UpdateUserBlockDto) {
+    const _id = new Types.ObjectId(id);
+    if (dto.isBlocked) {
+      const target = await this.userModel.findById(_id).lean().exec();
+      if (!target) {
+        throw new BadRequestException('User not found');
+      }
+      if (target.role === Role.ADMIN) {
+        const adminCount = await this.userModel.countDocuments({
+          role: Role.ADMIN,
+          isBlocked: false,
+        });
+        if (adminCount <= 1) {
+          throw new BadRequestException('Cannot remove last admin');
+        }
+      }
+    }
+    const updated = await this.userModel
+      .findByIdAndUpdate(
+        _id,
+        { isBlocked: dto.isBlocked },
+        {
+          new: true,
+        },
+      )
+      .select('-passwordHash')
+      .lean()
+      .exec();
+    if (!updated) {
+      throw new BadRequestException('User not found');
+    }
+    if (dto.isBlocked) {
+      await this.authService.logoutAll(id);
     }
     return updated;
   }

@@ -1,5 +1,14 @@
-import { Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
-import { AuthService } from './auth.service';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { AuthService, RevokeSessionResult } from './auth.service';
 import { LoginUserDto } from './dto/login-user.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ConfigService } from '@nestjs/config';
@@ -81,5 +90,26 @@ export class AuthController {
     await this.authService.logoutAll(userId);
     res.clearCookie('refreshToken', { path: '/' });
     return { success: true };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('sessions')
+  async listSessions(@UserId() userId: string) {
+    return await this.authService.listSessions(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('revoke/:jti')
+  async revokeSession(
+    @UserId() userId: string,
+    @Param('jti') jti: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<RevokeSessionResult> {
+    const result: RevokeSessionResult = await this.authService.revokeSession(
+      userId,
+      jti,
+    );
+    res.clearCookie('refreshToken', { path: '/' });
+    return result;
   }
 }

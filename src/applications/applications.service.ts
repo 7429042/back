@@ -16,6 +16,7 @@ import { CreateApplicationDto } from './dto/create-application.dto';
 import { canTransition, STATUS_TRANSITIONS } from './status.transitions';
 import { GetUserApplicationQueryDto } from './dto/get-user-application-query.dto';
 import { ConfigService } from '@nestjs/config';
+import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 
 @Injectable()
 export class ApplicationsService {
@@ -156,7 +157,12 @@ export class ApplicationsService {
     return app;
   }
 
-  async updateStatus(applicationId: string, nextStatus: StatusType) {
+  async updateStatus(
+    applicationId: string,
+    nextStatus: StatusType,
+    byUserId: string,
+    comment?: string,
+  ) {
     const app = await this.applicationModel.findById(applicationId).exec();
     if (!app) {
       throw new NotFoundException('Application not found');
@@ -164,19 +170,42 @@ export class ApplicationsService {
 
     const current: StatusType = app.status ?? StatusType.NEW;
 
+    if (current === nextStatus) {
+      const allowedNextSame = STATUS_TRANSITIONS[current] ?? [];
+      return {
+        id: String(app._id),
+        status: app.status,
+        allowedNext: allowedNextSame,
+      };
+    }
+
     if (!canTransition(current, nextStatus))
       throw new BadRequestException(
         `Cannot transition from ${current} to ${nextStatus}`,
       );
 
     app.status = nextStatus;
+
+    const historyItem = {
+      from: current,
+      to: nextStatus,
+      changedAt: new Date(),
+      byUser: new Types.ObjectId(byUserId),
+      comment,
+    };
+
+    if (!Array.isArray(app.statusHistory)) app.statusHistory = [];
+    app.statusHistory.push(historyItem);
+
     await app.save();
 
     const allowedNext = STATUS_TRANSITIONS[app.status] ?? [];
+    const lastHistory = app.statusHistory?.[app.statusHistory.length - 1];
     return {
       id: String(app._id),
       status: app.status,
       allowedNext,
+      lastHistory,
     };
   }
 
@@ -189,6 +218,8 @@ export class ApplicationsService {
     if (!app) {
       throw new NotFoundException('Application not found');
     }
+
+    this.ensureApplicationEditable(app);
 
     const idx = app.items.findIndex((it) => String(it?._id) === itemId);
     if (idx === -1) {
@@ -230,6 +261,8 @@ export class ApplicationsService {
       throw new NotFoundException('Application not found');
     }
 
+    this.ensureApplicationEditable(app);
+
     const idx = app.items.findIndex((it) => String(it?._id) === itemId);
     if (idx === -1) {
       throw new BadRequestException('Item not found');
@@ -239,6 +272,34 @@ export class ApplicationsService {
     app.items[idx].endDate = undefined;
     await app.save();
     return app.toObject();
+  }
+
+  async findStatusHistory(applicationId: string) {
+    const app = await this.applicationModel
+      .findById(applicationId)
+      .select({ statusHistory: 1 })
+      .lean()
+      .exec();
+
+    if (!app) {
+      throw new NotFoundException('Application not found');
+    }
+
+    const history = Array.isArray(app.statusHistory) ? app.statusHistory : [];
+    history.sort(
+      (a, b) =>
+        new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime(),
+    );
+    return { data: history };
+  }
+
+  private ensureApplicationEditable(app: Application) {
+    const status = app.status ?? StatusType.NEW;
+    if (status === StatusType.APPROVED || status === StatusType.REJECTED) {
+      throw new BadRequestException(
+        `Cannot edit application in status ${status}`,
+      );
+    }
   }
 
   private addDays(date: Date, days: number): Date {
@@ -254,5 +315,51 @@ export class ApplicationsService {
 
   private onlyDigits(value: string) {
     return value.replace(/\D+/g, '');
+  }
+
+  async adminList(query: ListApplicationsQueryDto) {
+    const offset = query?.offset ?? 0;
+    const limit = query?.limit ?? 20;
+    const sortBy = query?.sortBy ?? 'createdAt';
+    const sortDirection = query?.sortDirection ?? -1;
+
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+    if (query.userId) where.user = new Types.ObjectId(query.userId);
+
+    if (query.dateFrom || query.dateTo) {
+      const createdAt: Record<string, Date> = {};
+      if (query.dateFrom) createdAt.$gte = new Date(query.dateFrom);
+      if (query.dateTo) createdAt.$lte = new Date(query.dateTo);
+      where.createdAt = createdAt;
+    }
+
+    const [items, total] = await Promise.all([
+      this.applicationModel
+        .find(where)
+        .sort({ [sortBy]: sortDirection })
+        .skip(offset)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.applicationModel.countDocuments(where).exec(),
+    ]);
+
+    return {
+      data: items,
+      meta: {
+        total,
+        offset,
+        limit,
+        sortBy,
+        sortDirection,
+        filters: {
+          status: query.status ?? null,
+          userId: query.userId ?? null,
+          dateFrom: query.dateFrom ?? null,
+          dateTo: query.dateTo ?? null,
+        },
+      },
+    };
   }
 }

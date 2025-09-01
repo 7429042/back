@@ -24,6 +24,9 @@ export class User {
 
   @Prop({ required: false, trim: true })
   lastName?: string;
+
+  @Prop({ required: false, default: false, index: true })
+  isBlocked: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

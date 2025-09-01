@@ -19,6 +19,26 @@ export enum StatusType {
 }
 
 @Schema()
+class StatusHistoryItem {
+  @Prop({ required: true, enum: Object.values(StatusType), type: String })
+  from: StatusType;
+
+  @Prop({ required: true, enum: Object.values(StatusType), type: String })
+  to: StatusType;
+
+  @Prop({ required: true, type: Date, default: Date.now })
+  changedAt: Date;
+
+  @Prop({ required: true, type: Types.ObjectId, ref: 'User' })
+  byUser: Types.ObjectId;
+
+  @Prop({ required: false, type: String, trim: true })
+  comment?: string;
+}
+
+const StatusHistoryItemSchema = SchemaFactory.createForClass(StatusHistoryItem);
+
+@Schema()
 export class ApplicationItem {
   _id?: Types.ObjectId;
 
@@ -73,6 +93,9 @@ export class Application {
     default: StatusType.NEW,
   })
   status?: StatusType;
+
+  @Prop({ type: [StatusHistoryItemSchema], default: [] })
+  statusHistory?: StatusHistoryItem[];
 }
 
 export const ApplicationSchema = SchemaFactory.createForClass(Application);

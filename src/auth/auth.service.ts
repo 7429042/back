@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -15,6 +16,16 @@ import {
   RefreshSessionDocument,
 } from './schemas/refresh-session.schema';
 import { Model, Types } from 'mongoose';
+
+export type RevokeSessionResult = { success: true; message?: string };
+
+type SessionLean = {
+  jti: string;
+  createdAt: Date;
+  expiresAt: Date;
+  userAgent?: string;
+  ip?: string;
+};
 
 @Injectable()
 export class AuthService {
@@ -85,6 +96,17 @@ export class AuthService {
     );
   }
 
+  private isSessionLeanArray(value: unknown): value is SessionLean[] {
+    if (!Array.isArray(value)) return false;
+    if (value.length === 0) return true;
+    const e = value[0] as Record<string, unknown>;
+    return (
+      typeof e?.jti === 'string' &&
+      (e?.createdAt instanceof Date || typeof e?.createdAt === 'string') &&
+      (e?.expiresAt instanceof Date || typeof e?.expiresAt === 'string')
+    );
+  }
+
   private async enforceSessionLimit(userId: Types.ObjectId) {
     const max = this.configService.get<number>('REFRESH_MAX_SESSIONS', 5);
     const active = await this.refreshSessionModel
@@ -111,6 +133,10 @@ export class AuthService {
   async login(dto: LoginUserDto, meta?: { ip?: string; userAgent?: string }) {
     const user = await this.usersService.findByEmail(dto.email);
     if (!user) throw new BadRequestException('Invalid email or password');
+
+    if (user.isBlocked) {
+      throw new ForbiddenException('User is blocked');
+    }
 
     const isMatch = await bcrypt.compare(dto.password, user.passwordHash);
     if (!isMatch) throw new BadRequestException('Invalid email or password');
@@ -165,6 +191,12 @@ export class AuthService {
 
       if (!decoded.jti)
         throw new UnauthorizedException('Invalid or expired refresh token');
+
+      const user = await this.usersService.findById(decoded.sub);
+      if (!user) throw new UnauthorizedException('User not found');
+      if (user.isBlocked) {
+        throw new ForbiddenException('User is blocked');
+      }
 
       const session = await this.refreshSessionModel.findOne({
         jti: decoded.jti,
@@ -242,6 +274,72 @@ export class AuthService {
       },
       { $set: { revokedAt: new Date() } },
     );
+    return { success: true };
+  }
+
+  async listSessions(userId: string, currentTokenFromCookie?: string) {
+    const userObjectId = new Types.ObjectId(userId);
+    let currentJti: string | undefined;
+    if (currentTokenFromCookie) {
+      try {
+        const secret = this.configService.get<string>('JWT_REFRESH_SECRET');
+        if (secret) {
+          const decoded = await this.jwtService.verifyAsync<{
+            jti?: string;
+          }>(currentTokenFromCookie, { secret });
+          if (decoded.jti) currentJti = decoded.jti;
+        }
+      } catch {
+        /* empty */
+      }
+    }
+    const raw = await this.refreshSessionModel
+      .find({
+        user: userObjectId,
+        revokedAt: { $exists: false },
+        expiresAt: { $gt: new Date() },
+      })
+      .select({
+        jti: 1,
+        createdAt: 1,
+        expiresAt: 1,
+        userAgent: 1,
+        ip: 1,
+      })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+
+    const sessions: SessionLean[] = this.isSessionLeanArray(raw) ? raw : [];
+
+    return {
+      data: sessions.map((s) => ({
+        jti: s.jti,
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+        userAgent: s.userAgent,
+        ip: s.ip,
+        current: currentJti ? s.jti === currentJti : false,
+      })),
+    };
+  }
+
+  async revokeSession(
+    userId: string,
+    jti: string,
+  ): Promise<RevokeSessionResult> {
+    const userObjectId = new Types.ObjectId(userId);
+    const res = await this.refreshSessionModel.updateOne(
+      {
+        user: userObjectId,
+        jti,
+        revokedAt: { $exists: false },
+      },
+      { $set: { revokedAt: new Date() } },
+    );
+    if (res.matchedCount === 0) {
+      return { success: true, message: 'Session not found or already revoked' };
+    }
     return { success: true };
   }
 }

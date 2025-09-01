@@ -16,6 +16,7 @@ import { UpdateApplicationItemStartDateDto } from './dto/update-application-item
 import { GetUserApplicationQueryDto } from './dto/get-user-application-query.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserId } from '../auth/user-id.decorator';
+import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
 
 @Controller('applications')
 export class ApplicationsController {
@@ -49,8 +50,20 @@ export class ApplicationsController {
   async updateStatus(
     @Param('id') id: string,
     @Body() dto: UpdateApplicationStatusDto,
+    @UserId() userId: string,
   ) {
-    return this.applicationsService.updateStatus(id, dto.status);
+    return this.applicationsService.updateStatus(
+      id,
+      dto.status,
+      userId,
+      dto.comment,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get(':id/status-history')
+  async getStatusHistory(@Param('id') id: string) {
+    return this.applicationsService.findStatusHistory(id);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
@@ -74,5 +87,11 @@ export class ApplicationsController {
     @Param('itemId') itemId: string,
   ) {
     return this.applicationsService.clearItemDates(id, itemId);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Get()
+  async adminList(@Query() query: ListApplicationsQueryDto) {
+    return this.applicationsService.adminList(query);
   }
 }

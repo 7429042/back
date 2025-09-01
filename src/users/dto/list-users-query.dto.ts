@@ -1,5 +1,16 @@
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { Type } from 'class-transformer';
+import { Role } from '../schemas/userSchema';
 
 export class ListUsersQueryDto {
   @IsOptional()
@@ -24,4 +35,18 @@ export class ListUsersQueryDto {
   @IsInt()
   @IsIn([1, -1] as const)
   sortDirection?: 1 | -1 = -1;
+
+  @IsOptional()
+  @IsEnum(Role)
+  role?: string;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  isBlocked?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  q?: string;
 }
