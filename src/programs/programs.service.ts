@@ -7,6 +7,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { FilterQuery, Model, Types } from 'mongoose';
 import { Program, ProgramDocument } from './schemas/programSchema';
 import slugify from '@sindresorhus/slugify';
+import { ProgramResponseDto } from './dto/program-response.dto';
+import { AnyProgram, mapProgram, mapPrograms } from './mappers/program.mapper';
 
 @Injectable()
 export class ProgramsService {
@@ -49,31 +51,33 @@ export class ProgramsService {
     limit?: number;
     offset?: number;
     categoryIds?: Types.ObjectId[];
-  }) {
+    sort?: 'createdAt' | 'views' | 'hours';
+    order?: 'asc' | 'desc';
+    text?: string;
+  }): Promise<ProgramResponseDto[]> {
     const filter: FilterQuery<Program> = {};
     if (params.status) filter.status = params.status;
     if (params.categoryIds && params.categoryIds.length > 0) {
-      filter.category = {
-        $in: params.categoryIds,
-      };
+      filter.category = { $in: params.categoryIds };
+    }
+    if (params.text) {
+      const safe = new RegExp(this.escapeRegExp(params.text), 'i');
+      filter.$or = [{ title: safe }, { description: safe }];
     }
 
     const query = this.programModel.find(filter);
-    if (params.sortByViews) {
-      query.sort({ views: -1, createdAt: -1 });
-    } else {
-      query.sort({ createdAt: -1 });
-    }
 
-    if (params.limit) {
-      query.limit(params.limit);
-    }
+    const primary = params.sort ?? (params.sortByViews ? 'views' : 'createdAt');
+    const dir = params.order === 'asc' ? 1 : -1;
+    const sortSpec: Record<string, 1 | -1> = { [primary]: dir };
+    if (primary !== 'createdAt') sortSpec.createdAt = -1;
+    query.sort(sortSpec);
 
-    if (params.offset) {
-      query.skip(params.offset);
-    }
+    if (params.limit) query.limit(params.limit);
+    if (params.offset) query.skip(params.offset);
 
-    return query.lean().exec();
+    const rows = await query.lean<AnyProgram[]>().exec();
+    return mapPrograms(rows);
   }
 
   async findAllWithMeta(params: {
@@ -83,7 +87,14 @@ export class ProgramsService {
     offset?: number;
     categoryIds?: Types.ObjectId[];
     text?: string;
-  }) {
+    sort?: 'createdAt' | 'views' | 'hours';
+    order?: 'asc' | 'desc';
+  }): Promise<{
+    items: ProgramResponseDto[];
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
     const filter: FilterQuery<Program> = {};
     if (params.status) filter.status = params.status;
     if (params.categoryIds && params.categoryIds.length > 0)
@@ -98,19 +109,20 @@ export class ProgramsService {
     const offset = Math.max(params.offset ?? 0, 0);
 
     const baseQuery = this.programModel.find(filter);
-    if (params.sortByViews) {
-      baseQuery.sort({ views: -1, createdAt: -1 });
-    } else {
-      baseQuery.sort({ createdAt: -1 });
-    }
 
-    const [items, total] = await Promise.all([
-      baseQuery.skip(offset).limit(limit).lean().exec(),
+    const primary = params.sort ?? (params.sortByViews ? 'views' : 'createdAt');
+    const dir = params.order === 'asc' ? 1 : -1;
+    const sortSpec: Record<string, 1 | -1> = { [primary]: dir };
+    if (primary !== 'createdAt') sortSpec.createdAt = -1;
+    baseQuery.sort(sortSpec);
+
+    const [itemsRaw, total] = await Promise.all([
+      baseQuery.skip(offset).limit(limit).lean<AnyProgram[]>().exec(),
       this.programModel.countDocuments(filter).exec(),
     ]);
 
     return {
-      items,
+      items: mapPrograms(itemsRaw),
       total,
       limit,
       offset,
@@ -122,7 +134,7 @@ export class ProgramsService {
     options?: {
       incrementView?: boolean;
     },
-  ) {
+  ): Promise<ProgramResponseDto> {
     const incrementView = options?.incrementView ?? true;
 
     if (!Types.ObjectId.isValid(id)) {
@@ -132,16 +144,20 @@ export class ProgramsService {
     const doc = incrementView
       ? await this.programModel
           .findByIdAndUpdate(id, { $inc: { views: 1 } }, { new: true })
+          .lean<AnyProgram>()
           .exec()
-      : await this.programModel.findById(id).exec();
+      : await this.programModel.findById(id).lean<AnyProgram>().exec();
 
     if (!doc) {
       throw new NotFoundException('Program not found');
     }
-    return doc;
+    return mapProgram(doc);
   }
 
-  async findOneBySlug(slug: string, options?: { incrementView?: boolean }) {
+  async findOneBySlug(
+    slug: string,
+    options?: { incrementView?: boolean },
+  ): Promise<ProgramResponseDto> {
     const incrementView = options?.incrementView ?? true;
     const normalized = this.normalizeSlug(slug);
 
@@ -152,15 +168,20 @@ export class ProgramsService {
             { $inc: { views: 1 } },
             { new: true },
           )
+          .lean<AnyProgram>()
           .exec()
-      : await this.programModel.findOne({ slug: normalized }).exec();
+      : await this.programModel
+          .findOne({ slug: normalized })
+          .lean<AnyProgram>()
+          .exec();
+
     if (!doc) {
       throw new NotFoundException('Program not found');
     }
-    return doc;
+    return mapProgram(doc);
   }
 
-  async publish(id: string) {
+  async publish(id: string): Promise<ProgramResponseDto> {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException('Program not found');
     }
@@ -201,7 +222,16 @@ export class ProgramsService {
 
     doc.status = 'published';
     await doc.save();
-    return doc;
+
+    // Получаем lean-версию для маппинга без any
+    const view = await this.programModel
+      .findById(doc._id)
+      .lean<AnyProgram>()
+      .exec();
+    if (!view) {
+      throw new NotFoundException('Program not found');
+    }
+    return mapProgram(view);
   }
 
   async updateDraft(
@@ -217,19 +247,19 @@ export class ProgramsService {
         | 'category'
       >
     >,
-  ) {
+  ): Promise<ProgramResponseDto> {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException('Program not found');
     }
 
     const doc = await this.programModel.findById(id).exec();
-
     if (!doc) {
       throw new NotFoundException('Program not found');
     }
     if (doc.status !== 'draft') {
       throw new BadRequestException('Program is not in draft status');
     }
+
     if (typeof updates.title !== 'undefined') {
       doc.title = updates.title;
       if (updates.title && updates.title.trim()) {
@@ -255,10 +285,19 @@ export class ProgramsService {
       doc.category = updates.category;
     }
     await doc.save();
-    return doc;
+
+    // Возвращаем lean, чтобы не тащить Mongoose Document
+    const view = await this.programModel
+      .findById(doc._id)
+      .lean<AnyProgram>()
+      .exec();
+    if (!view) {
+      throw new NotFoundException('Program not found');
+    }
+    return mapProgram(view);
   }
 
-  async deleteDraft(id: string) {
+  async deleteDraft(id: string): Promise<{ deleted: true }> {
     if (!Types.ObjectId.isValid(id)) {
       throw new NotFoundException('Program not found');
     }
@@ -269,7 +308,7 @@ export class ProgramsService {
     if (doc.status !== 'draft') {
       throw new BadRequestException('Program is not in draft status');
     }
-    await doc.deleteOne({ id: doc._id }).exec();
+    await this.programModel.findByIdAndDelete(doc._id).exec();
     return { deleted: true };
   }
 }
