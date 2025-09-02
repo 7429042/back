@@ -1,15 +1,6 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import {
-  Application,
-  ApplicationDocument,
-  ApplicationItem,
-  StatusType,
-} from './schemas/application.schema';
+import { Application, ApplicationDocument, ApplicationItem, StatusType, } from './schemas/application.schema';
 import { Model, Types } from 'mongoose';
 import { Program, ProgramDocument } from '../programs/schemas/programSchema';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -334,14 +325,33 @@ export class ApplicationsService {
       where.createdAt = createdAt;
     }
 
+    const cursor = this.applicationModel
+      .find(where)
+      .sort({ [sortBy]: sortDirection })
+      .skip(offset)
+      .limit(limit);
+
+    if (query.withUser) {
+      cursor.populate({
+        path: 'user',
+        select: {
+          email: 1,
+        },
+      });
+    }
+
+    if (query.withProgram) {
+      cursor.populate({
+        path: 'items.program',
+        select: {
+          title: 1,
+          hours: 1,
+        },
+      });
+    }
+
     const [items, total] = await Promise.all([
-      this.applicationModel
-        .find(where)
-        .sort({ [sortBy]: sortDirection })
-        .skip(offset)
-        .limit(limit)
-        .lean()
-        .exec(),
+      cursor.lean().exec()
       this.applicationModel.countDocuments(where).exec(),
     ]);
 
@@ -358,6 +368,8 @@ export class ApplicationsService {
           userId: query.userId ?? null,
           dateFrom: query.dateFrom ?? null,
           dateTo: query.dateTo ?? null,
+          withUser: !!query.withUser,
+          withProgram: !!query.withProgram,
         },
       },
     };
