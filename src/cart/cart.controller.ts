@@ -11,7 +11,7 @@ import {
 import { CartService } from './cart.service';
 import { AddItemDto } from './dto/add-item.dto';
 import { SetQuantityDto } from './dto/set-quantity.dto';
-import { UserId } from '../auth/user-id.decorator';
+import { UserId } from '../auth/decorators/user-id.decorator';
 
 @Controller('cart')
 export class CartController {

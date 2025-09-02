@@ -13,8 +13,8 @@ import { LoginUserDto } from './dto/login-user.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
-import { JwtAuthGuard } from './jwt-auth.guard';
-import { UserId } from './user-id.decorator';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { UserId } from './decorators/user-id.decorator';
 
 @Controller('auth')
 export class AuthController {

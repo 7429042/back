@@ -11,10 +11,10 @@ import {
 } from '@nestjs/common';
 import { ChangePasswordResult, UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { UserId } from '../auth/user-id.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { UserId } from '../auth/decorators/user-id.decorator';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
-import { AdminGuard } from '../auth/admin.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserBlockDto } from './dto/update-user-block.dto';

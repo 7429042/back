@@ -15,9 +15,9 @@ import { CategoriesService } from '../categories/categories.service';
 import { Types } from 'mongoose';
 import { ParamIdDto } from '../common/dto/param-id.dto';
 import { GetProgramQueryDto } from './dto/get-program-query.dto';
-import { AdminGuard } from '../auth/admin.guard';
+import { AdminGuard } from '../auth/guards/admin.guard';
 import { UpdateProgramDto } from './dto/update-program.dto';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('programs')
 export class ProgramsController {

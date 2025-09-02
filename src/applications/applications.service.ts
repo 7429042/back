@@ -1,6 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException, } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Application, ApplicationDocument, ApplicationItem, StatusType, } from './schemas/application.schema';
+import {
+  Application,
+  ApplicationDocument,
+  ApplicationItem,
+  StatusType,
+} from './schemas/application.schema';
 import { Model, Types } from 'mongoose';
 import { Program, ProgramDocument } from '../programs/schemas/programSchema';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -8,6 +17,12 @@ import { canTransition, STATUS_TRANSITIONS } from './status.transitions';
 import { GetUserApplicationQueryDto } from './dto/get-user-application-query.dto';
 import { ConfigService } from '@nestjs/config';
 import { ListApplicationsQueryDto } from './dto/list-applications-query.dto';
+import {
+  addDays,
+  calculateStudyDays,
+  onlyDigits,
+} from '../common/utils/helpers';
+import { ensureValidObjectId } from '../common/mongo/object-id.util';
 
 @Injectable()
 export class ApplicationsService {
@@ -19,17 +34,109 @@ export class ApplicationsService {
     private readonly programModel: Model<ProgramDocument>,
     private readonly configService: ConfigService,
   ) {
-    this.hoursPerDay = this.configService.get<number>('HOURS_PER_DAY', 8);
+    const cfg = this.configService.get<number>('HOURS_PER_DAY', 8);
+    const normalized = Number.isFinite(cfg) ? Math.floor(cfg) : 8;
+    this.hoursPerDay = normalized > 0 ? normalized : 8;
+  }
+
+  private normalizeSort(
+    sortByInput: unknown,
+    sortDirectionInput: unknown,
+    allowedFields: readonly string[],
+  ): { sortBy: string; sortDirection: 1 | -1 } {
+    const defaultField = 'createdAt';
+    const sortBy =
+      typeof sortByInput === 'string' && allowedFields.includes(sortByInput)
+        ? sortByInput
+        : defaultField;
+
+    const dirNum =
+      typeof sortDirectionInput === 'number' &&
+      (sortDirectionInput === 1 || sortDirectionInput === -1)
+        ? sortDirectionInput
+        : -1;
+
+    return { sortBy, sortDirection: dirNum };
+  }
+
+  private ensureApplicationEditable(app: Application) {
+    const status = app.status ?? StatusType.NEW;
+    if (status === StatusType.APPROVED || status === StatusType.REJECTED) {
+      throw new BadRequestException(
+        `Cannot edit application in status ${status}`,
+      );
+    }
+  }
+
+  private studyDaysByHours(hours: number): number {
+    return calculateStudyDays(hours, this.hoursPerDay);
   }
 
   async create(dto: CreateApplicationDto, userId: string) {
     if (!dto.items.length) {
       throw new BadRequestException('Items must not be empty');
     }
-    const snilsDigits = this.onlyDigits(dto.snils);
-    const innDigits = this.onlyDigits(dto.inn);
+    ensureValidObjectId(userId, 'userId');
 
-    const programIds = dto.items.map((it) => it.programId);
+    const snilsDigits = onlyDigits(dto.snils);
+    const innDigits = onlyDigits(dto.inn);
+
+    // Агрегируем элементы по programId: суммируем quantity, выбираем самую раннюю валидную startDate
+    const aggregatedMap: Map<string, { quantity: number; startDate?: string }> =
+      new Map();
+
+    for (const it of dto.items) {
+      const q = it.quantity ?? 1;
+      const prev = aggregatedMap.get(it.programId) ?? { quantity: 0 };
+      const nextQuantity = (prev.quantity ?? 0) + q;
+
+      let nextStart: string | undefined = prev.startDate;
+      if (it.startDate) {
+        const isValid = !isNaN(new Date(it.startDate).getTime());
+        if (isValid) {
+          if (!nextStart) {
+            nextStart = it.startDate;
+          } else if (
+            new Date(it.startDate).getTime() < new Date(nextStart).getTime()
+          ) {
+            nextStart = it.startDate;
+          }
+        }
+      }
+
+      aggregatedMap.set(it.programId, {
+        quantity: nextQuantity,
+        startDate: nextStart,
+      });
+    }
+
+    // Преобразуем Map в массив с явной типизацией
+    const aggregatedItems: Array<{
+      programId: string;
+      quantity: number;
+      startDate?: string;
+    }> = [];
+    for (const [programId, v] of aggregatedMap) {
+      aggregatedItems.push({
+        programId,
+        quantity: v.quantity,
+        startDate: v.startDate,
+      });
+    }
+
+    // Используем агрегированный список для дальнейшей валидации/запросов
+    const programIds = aggregatedItems.map((it) => it.programId);
+
+    const invalidProgramIds = Array.from(
+      new Set(programIds.filter((id) => !Types.ObjectId.isValid(id))),
+    );
+
+    if (invalidProgramIds.length) {
+      throw new BadRequestException(
+        `Invalid program IDs: ${invalidProgramIds.join(', ')}`,
+      );
+    }
+
     const uniqueObjectIds = Array.from(new Set(programIds)).map(
       (id) => new Types.ObjectId(id),
     );
@@ -62,7 +169,8 @@ export class ApplicationsService {
 
     const now = new Date();
 
-    const items: ApplicationItem[] = dto.items.map((i) => {
+    // Формируем элементы заявки из агрегированного списка
+    const items: ApplicationItem[] = aggregatedItems.map((i) => {
       const meta = byId.get(i.programId)!;
       const quantity = i.quantity ?? 1;
 
@@ -86,13 +194,14 @@ export class ApplicationsService {
         }
         item.startDate = start;
         if (days > 0) {
-          item.endDate = this.addDays(start, days);
+          item.endDate = addDays(start, days);
         }
       } else if (days > 0) {
-        item.endDate = this.addDays(now, days);
+        item.endDate = addDays(now, days);
       }
       return item;
     });
+
     return await this.applicationModel.create({
       user: new Types.ObjectId(userId),
       items,
@@ -105,11 +214,15 @@ export class ApplicationsService {
   }
 
   async findByUser(userId: string, query: GetUserApplicationQueryDto) {
+    ensureValidObjectId(userId, 'userId');
     const userObjectId = new Types.ObjectId(userId);
     const offset = query?.offset ?? 0;
     const limit = query?.limit ?? 20;
-    const sortBy = query?.sortBy ?? 'createdAt';
-    const sortDirection = query?.sortDirection ?? -1;
+    const { sortBy, sortDirection } = this.normalizeSort(
+      query?.sortBy,
+      query?.sortDirection,
+      ['createdAt', 'updatedAt'],
+    );
 
     const [items, total] = await Promise.all([
       this.applicationModel
@@ -134,6 +247,7 @@ export class ApplicationsService {
   }
 
   async findOneById(applicationId: string, withProgram = false) {
+    ensureValidObjectId(applicationId, 'applicationId');
     const query = this.applicationModel.findById(applicationId);
     if (withProgram) {
       query.populate({
@@ -154,6 +268,8 @@ export class ApplicationsService {
     byUserId: string,
     comment?: string,
   ) {
+    ensureValidObjectId(applicationId, 'applicationId');
+    ensureValidObjectId(byUserId, 'byUserId');
     const app = await this.applicationModel.findById(applicationId).exec();
     if (!app) {
       throw new NotFoundException('Application not found');
@@ -205,6 +321,8 @@ export class ApplicationsService {
     itemId: string,
     startDateIso: string,
   ) {
+    ensureValidObjectId(applicationId, 'applicationId');
+    ensureValidObjectId(itemId, 'itemId');
     const app = await this.applicationModel.findById(applicationId).exec();
     if (!app) {
       throw new NotFoundException('Application not found');
@@ -225,6 +343,11 @@ export class ApplicationsService {
       throw new BadRequestException('Invalid start date');
     }
 
+    const now = new Date();
+    if (startDate.getTime() < now.getTime()) {
+      throw new BadRequestException('Start date must be in the future');
+    }
+
     const programId = item.program as unknown as Types.ObjectId;
     const program = await this.programModel
       .findById(programId, { hours: 1 })
@@ -238,7 +361,55 @@ export class ApplicationsService {
     const days = this.studyDaysByHours(program.hours ?? 0);
     item.startDate = startDate;
     if (days > 0) {
-      item.endDate = this.addDays(startDate, days);
+      item.endDate = addDays(startDate, days);
+    } else {
+      item.endDate = undefined;
+    }
+    await app.save();
+    return app.toObject();
+  }
+
+  async updateItemStartDateAdmin(
+    applicationId: string,
+    itemId: string,
+    startDateIso: string,
+  ) {
+    ensureValidObjectId(applicationId, 'applicationId');
+    ensureValidObjectId(itemId, 'itemId');
+
+    const app = await this.applicationModel.findById(applicationId).exec();
+    if (!app) {
+      throw new NotFoundException('Application not found');
+    }
+
+    this.ensureApplicationEditable(app);
+
+    const idx = app.items.findIndex((it) => String(it?._id) === itemId);
+    if (idx === -1) {
+      throw new BadRequestException('Item not found');
+    }
+
+    const item = app.items[idx];
+    const startDate = new Date(startDateIso);
+
+    if (isNaN(startDate.getTime())) {
+      throw new BadRequestException('Invalid start date');
+    }
+
+    const programId = item.program as unknown as Types.ObjectId;
+    const program = await this.programModel
+      .findById(programId, { hours: 1 })
+      .lean()
+      .exec();
+
+    if (!program) {
+      throw new BadRequestException('Program not found');
+    }
+
+    const days = this.studyDaysByHours(program.hours ?? 0);
+    item.startDate = startDate;
+    if (days > 0) {
+      item.endDate = addDays(startDate, days);
     } else {
       item.endDate = undefined;
     }
@@ -247,6 +418,8 @@ export class ApplicationsService {
   }
 
   async clearItemDates(applicationId: string, itemId: string) {
+    ensureValidObjectId(applicationId, 'applicationId');
+    ensureValidObjectId(itemId, 'itemId');
     const app = await this.applicationModel.findById(applicationId).exec();
     if (!app) {
       throw new NotFoundException('Application not found');
@@ -266,6 +439,7 @@ export class ApplicationsService {
   }
 
   async findStatusHistory(applicationId: string) {
+    ensureValidObjectId(applicationId, 'applicationId');
     const app = await this.applicationModel
       .findById(applicationId)
       .select({ statusHistory: 1 })
@@ -284,44 +458,34 @@ export class ApplicationsService {
     return { data: history };
   }
 
-  private ensureApplicationEditable(app: Application) {
-    const status = app.status ?? StatusType.NEW;
-    if (status === StatusType.APPROVED || status === StatusType.REJECTED) {
-      throw new BadRequestException(
-        `Cannot edit application in status ${status}`,
-      );
-    }
-  }
-
-  private addDays(date: Date, days: number): Date {
-    const result = new Date(date.getTime());
-    result.setDate(result.getDate() + days);
-    return result;
-  }
-
-  private studyDaysByHours(hours: number): number {
-    const h = Math.max(0, hours || 0);
-    return Math.ceil(h / this.hoursPerDay);
-  }
-
-  private onlyDigits(value: string) {
-    return value.replace(/\D+/g, '');
-  }
-
   async adminList(query: ListApplicationsQueryDto) {
     const offset = query?.offset ?? 0;
     const limit = query?.limit ?? 20;
-    const sortBy = query?.sortBy ?? 'createdAt';
-    const sortDirection = query?.sortDirection ?? -1;
+    const { sortBy, sortDirection } = this.normalizeSort(
+      query?.sortBy,
+      query?.sortDirection,
+      ['createdAt', 'updatedAt', 'status'],
+    );
 
     const where: Record<string, unknown> = {};
     if (query.status) where.status = query.status;
-    if (query.userId) where.user = new Types.ObjectId(query.userId);
+    if (query.userId) {
+      ensureValidObjectId(query.userId, 'userId');
+      where.user = new Types.ObjectId(query.userId);
+    }
 
     if (query.dateFrom || query.dateTo) {
       const createdAt: Record<string, Date> = {};
       if (query.dateFrom) createdAt.$gte = new Date(query.dateFrom);
       if (query.dateTo) createdAt.$lte = new Date(query.dateTo);
+
+      if (query.dateFrom && query.dateTo) {
+        const from = new Date(query.dateFrom);
+        const to = new Date(query.dateTo);
+        if (from.getTime() > to.getTime()) {
+          throw new BadRequestException('Invalid date range');
+        }
+      }
       where.createdAt = createdAt;
     }
 
@@ -351,7 +515,7 @@ export class ApplicationsService {
     }
 
     const [items, total] = await Promise.all([
-      cursor.lean().exec()
+      cursor.lean().exec(),
       this.applicationModel.countDocuments(where).exec(),
     ]);
 
