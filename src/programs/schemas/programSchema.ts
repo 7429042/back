@@ -47,6 +47,9 @@ export class Program {
     index: true,
   })
   status: ProgramStatus;
+
+  @Prop({ required: false, index: true })
+  lowercaseTitle?: string;
 }
 
 export const ProgramSchema = SchemaFactory.createForClass(Program);
@@ -67,7 +70,35 @@ ProgramSchema.pre('save', function (next) {
   } else {
     doc.completionDocument = undefined;
   }
+  doc.lowercaseTitle =
+    typeof doc.title === 'string' && doc.title.trim().length > 0
+      ? doc.title.trim().toLowerCase()
+      : undefined;
   next();
 });
 
-ProgramSchema.index({ title: 'text', description: 'text' });
+ProgramSchema.index(
+  { title: 'text', description: 'text' },
+  {
+    weights: {
+      title: 10,
+      description: 5,
+    },
+    name: 'ProgramTextIndex',
+    default_language: 'russian',
+    language_override: 'language',
+  },
+);
+
+ProgramSchema.index(
+  {
+    status: 1,
+    catogory: 1,
+    lowercaseTitle: 1,
+    views: -1,
+    createdAt: -1,
+  },
+  {
+    name: 'ProgramSuggestIndex',
+  },
+);

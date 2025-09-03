@@ -18,7 +18,14 @@ import { GetProgramQueryDto } from './dto/get-program-query.dto';
 import { AdminGuard } from '../auth/guards/admin.guard';
 import { UpdateProgramDto } from './dto/update-program.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SuggestProgramsQueryDto } from './dto/suggest-programs-query.dto';
+import { ApiOkResponse, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  ProgramResponseDto,
+  ProgramsSearchResponseDto,
+} from './dto/program-response.dto';
 
+@ApiTags('Programs')
 @Controller('programs')
 export class ProgramsController {
   constructor(
@@ -33,6 +40,51 @@ export class ProgramsController {
   }
 
   @Get()
+  @ApiOkResponse({
+    description: 'Список программ',
+    type: ProgramResponseDto,
+    isArray: true,
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['draft', 'published'],
+    description: 'Статус программы',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Лимит (1..100), по умолчанию 20',
+    example: 20,
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: Number,
+    description: 'Смещение (>=0), по умолчанию 0',
+    example: 0,
+  })
+  @ApiQuery({
+    name: 'categorySlug',
+    required: false,
+    type: String,
+    description: 'Слаг категории для фильтрации (включая потомков)',
+  })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    enum: ['createdAt', 'views', 'hours'],
+    description: 'Поле сортировки',
+    example: 'createdAt',
+  })
+  @ApiQuery({
+    name: 'order',
+    required: false,
+    enum: ['asc', 'desc'],
+    description: 'Направление сортировки',
+    example: 'desc',
+  })
   async findAll(@Query() query: FindProgramsQueryDto) {
     let categoryIds: Types.ObjectId[] | undefined = undefined;
     if (query.categorySlug) {
@@ -43,14 +95,65 @@ export class ProgramsController {
     }
     return this.programsService.findAll({
       status: query.status,
-      sortByViews: query.sortByViews,
       limit: query.limit,
       offset: query.offset,
       categoryIds,
+      sort: query.sort,
+      order: query.order,
     });
   }
 
   @Get('search')
+  @ApiOkResponse({
+    description: 'Результаты поиска программ с пагинацией и метаданными',
+    type: ProgramsSearchResponseDto,
+  })
+  @ApiQuery({
+    name: 'text',
+    required: false,
+    type: String,
+    description: 'Поисковая строка (2..100), AND по словам',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['draft', 'published'],
+    description: 'Статус программы',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Лимит (1..100), по умолчанию 20',
+    example: 20,
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: Number,
+    description: 'Смещение (>=0), по умолчанию 0',
+    example: 0,
+  })
+  @ApiQuery({
+    name: 'categorySlug',
+    required: false,
+    type: String,
+    description: 'Слаг категории для фильтрации (включая потомков)',
+  })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    enum: ['createdAt', 'views', 'hours'],
+    description: 'Поле сортировки',
+    example: 'createdAt',
+  })
+  @ApiQuery({
+    name: 'order',
+    required: false,
+    enum: ['asc', 'desc'],
+    description: 'Направление сортировки',
+    example: 'desc',
+  })
   async search(@Query() query: FindProgramsQueryDto) {
     let categoryIds: Types.ObjectId[] | undefined = undefined;
     if (query.categorySlug) {
@@ -66,11 +169,12 @@ export class ProgramsController {
 
     return this.programsService.findAllWithMeta({
       status: query.status,
-      sortByViews: query.sortByViews,
       limit: query.limit,
       offset: query.offset,
       categoryIds,
       text: safeText,
+      sort: query.sort,
+      order: query.order,
     });
   }
 
@@ -90,6 +194,48 @@ export class ProgramsController {
   ) {
     const incrementView = query.incrementView ?? true;
     return this.programsService.findOneById(params.id, { incrementView });
+  }
+
+  @ApiOkResponse({
+    description: 'Подсказки по началу названия программы',
+    type: ProgramResponseDto,
+    isArray: true,
+  })
+  @ApiQuery({
+    name: 'q',
+    required: false,
+    type: String,
+    description: 'Префикс названия (минимум 1 символ)',
+    example: 'pro',
+  })
+  @ApiQuery({
+    name: 'categorySlug',
+    required: false,
+    type: String,
+    description: 'Слаг категории для фильтрации подсказок (включая потомков)',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    description: 'Лимит результатов (1..20), по умолчанию 10',
+    example: 10,
+  })
+  @Get('suggest')
+  async suggest(@Query() query: SuggestProgramsQueryDto) {
+    let categoryIds: Types.ObjectId[] | undefined;
+    if (query.categorySlug) {
+      categoryIds =
+        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+          query.categorySlug,
+        );
+    }
+    return this.programsService.suggest({
+      q: query.q,
+      limit: query.limit,
+      categoryIds,
+      status: 'published',
+    });
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)

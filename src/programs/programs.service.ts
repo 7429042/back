@@ -17,6 +17,17 @@ export class ProgramsService {
     private readonly programModel: Model<ProgramDocument>,
   ) {}
 
+  // Простой кэш для suggest (ключ -> данные с TTL)
+  private readonly suggestCache = new Map<
+    string,
+    { expires: number; data: ProgramResponseDto[] }
+  >();
+  private readonly SUGGEST_TTL_MS = 60_000;
+
+  private clearSuggestCache() {
+    this.suggestCache.clear();
+  }
+
   private normalizeSlug(input: string) {
     return slugify(input, { separator: '-', lowercase: true });
   }
@@ -47,7 +58,6 @@ export class ProgramsService {
 
   async findAll(params: {
     status?: 'draft' | 'published';
-    sortByViews?: boolean;
     limit?: number;
     offset?: number;
     categoryIds?: Types.ObjectId[];
@@ -60,15 +70,39 @@ export class ProgramsService {
     if (params.categoryIds && params.categoryIds.length > 0) {
       filter.category = { $in: params.categoryIds };
     }
+
+    let useTextScore = false;
     if (params.text) {
-      const safe = new RegExp(this.escapeRegExp(params.text), 'i');
-      filter.$or = [{ title: safe }, { description: safe }];
+      const words = params.text
+        .split(/\s+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 2);
+      if (words.length > 0) {
+        // AND-логика через кавычки вокруг каждого слова
+        const search = words.map((w) => `"${w}"`).join(' ');
+        filter.$text = {
+          $search: search,
+          $caseSensitive: false,
+          $diacriticSensitive: false,
+        };
+        useTextScore = true;
+      }
     }
 
-    const query = this.programModel.find(filter);
-
-    const primary = params.sort ?? (params.sortByViews ? 'views' : 'createdAt');
+    const primary = params.sort ?? 'createdAt';
     const dir = params.order === 'asc' ? 1 : -1;
+
+    // Формируем запрос: с проекцией textScore или без неё
+    const query = useTextScore
+      ? this.programModel.find(filter, {
+          score: { $meta: 'textScore' } as unknown as 1,
+        })
+      : this.programModel.find(filter);
+
+    // Сортировка: сперва по релевантности (если есть), затем по выбранному полю и createdAt
+    if (useTextScore) {
+      query.sort({ score: { $meta: 'textScore' } as unknown as 1 });
+    }
     const sortSpec: Record<string, 1 | -1> = { [primary]: dir };
     if (primary !== 'createdAt') sortSpec.createdAt = -1;
     query.sort(sortSpec);
@@ -82,7 +116,6 @@ export class ProgramsService {
 
   async findAllWithMeta(params: {
     status?: 'draft' | 'published';
-    sortByViews?: boolean;
     limit?: number;
     offset?: number;
     categoryIds?: Types.ObjectId[];
@@ -99,19 +132,40 @@ export class ProgramsService {
     if (params.status) filter.status = params.status;
     if (params.categoryIds && params.categoryIds.length > 0)
       filter.category = { $in: params.categoryIds };
+
+    let useTextScore = false;
     if (params.text) {
-      const safe = new RegExp(this.escapeRegExp(params.text), 'i');
-      filter.$or = [{ title: safe }, { description: safe }];
+      const words = params.text
+        .split(/\s+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 2);
+      if (words.length > 0) {
+        const search = words.map((w) => `"${w}"`).join(' ');
+        filter.$text = {
+          $search: search,
+          $caseSensitive: false,
+          $diacriticSensitive: false,
+        };
+        useTextScore = true;
+      }
     }
 
     const MAX_LIMIT = 100;
     const limit = Math.min(Math.max(params.limit ?? 20, 1), MAX_LIMIT);
     const offset = Math.max(params.offset ?? 0, 0);
 
-    const baseQuery = this.programModel.find(filter);
-
-    const primary = params.sort ?? (params.sortByViews ? 'views' : 'createdAt');
+    const primary = params.sort ?? 'createdAt';
     const dir = params.order === 'asc' ? 1 : -1;
+
+    const baseQuery = useTextScore
+      ? this.programModel.find(filter, {
+          score: { $meta: 'textScore' } as unknown as 1,
+        })
+      : this.programModel.find(filter);
+
+    if (useTextScore) {
+      baseQuery.sort({ score: { $meta: 'textScore' } as unknown as 1 });
+    }
     const sortSpec: Record<string, 1 | -1> = { [primary]: dir };
     if (primary !== 'createdAt') sortSpec.createdAt = -1;
     baseQuery.sort(sortSpec);
@@ -195,9 +249,27 @@ export class ProgramsService {
     }
 
     const errors: string[] = [];
+
+    // Проверки title и дубля среди опубликованных
     if (!doc.title || !doc.title.trim()) {
       errors.push('Title is required');
+    } else {
+      const titleTrim = doc.title.trim();
+      if (titleTrim.length < 3) {
+        errors.push('Title must be at least 3 characters');
+      }
+      const baseSlug = this.normalizeSlug(titleTrim);
+      const duplicate = await this.programModel.exists({
+        slug: baseSlug,
+        status: 'published',
+        _id: { $ne: doc._id },
+      });
+      if (duplicate) {
+        errors.push('Program with the same title is already published');
+      }
     }
+
+    // Прочие обязательные поля
     if (!doc.category) {
       errors.push('Category is required');
     }
@@ -210,20 +282,24 @@ export class ProgramsService {
     if (doc.categoryType === 'dpo' && !doc.dpoSubcategory) {
       errors.push('DPO subcategory is required');
     }
+
     if (errors.length > 0) {
       throw new BadRequestException(
         `Cannot publish program: ${errors.join(', ')}`,
       );
     }
-    if (!doc.slug || !doc.slug.trim()) {
-      const base = this.normalizeSlug(doc.title!);
-      doc.slug = await this.ensureUniqueSlug(base, doc._id);
-    }
+
+    // Именуем slug и гарантируем глобальную уникальность
+    const base = this.normalizeSlug(doc.title!.trim());
+    doc.slug = await this.ensureUniqueSlug(base, doc._id);
 
     doc.status = 'published';
     await doc.save();
 
-    // Получаем lean-версию для маппинга без any
+    // Инвалидация кэша подсказок
+    this.clearSuggestCache();
+
+    // Возвращаем lean-версию
     const view = await this.programModel
       .findById(doc._id)
       .lean<AnyProgram>()
@@ -286,6 +362,8 @@ export class ProgramsService {
     }
     await doc.save();
 
+    this.clearSuggestCache();
+
     // Возвращаем lean, чтобы не тащить Mongoose Document
     const view = await this.programModel
       .findById(doc._id)
@@ -309,6 +387,82 @@ export class ProgramsService {
       throw new BadRequestException('Program is not in draft status');
     }
     await this.programModel.findByIdAndDelete(doc._id).exec();
+    this.clearSuggestCache();
     return { deleted: true };
+  }
+
+  // Новое: быстрые подсказки по префиксу названия
+  async suggest(params: {
+    q?: string;
+    limit?: number;
+    categoryIds?: Types.ObjectId[];
+    status?: 'draft' | 'published';
+  }): Promise<ProgramResponseDto[]> {
+    const limit = Math.min(Math.max(params.limit ?? 10, 1), 20);
+
+    const filter: FilterQuery<Program> = {};
+    // По умолчанию показываем только опубликованные
+    const status: 'draft' | 'published' = params.status ?? 'published';
+    filter.status = status;
+
+    if (params.categoryIds && params.categoryIds.length > 0) {
+      filter.category = { $in: params.categoryIds };
+    }
+
+    if (!params.q || params.q.length < 1) {
+      return [];
+    }
+
+    const safe = this.escapeRegExp(params.q);
+    const cats: string[] = params.categoryIds
+      ? params.categoryIds.map((id) => String(id))
+      : [];
+
+    // Ключ кэша: учитываем строку, лимит, статус и категории
+    const cacheKey = JSON.stringify({
+      q: safe,
+      limit,
+      status,
+      cats,
+    });
+
+    const cached = this.suggestCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && cached.expires > now) {
+      return cached.data;
+    } else if (cached) {
+      this.suggestCache.delete(cacheKey);
+    }
+
+    // Ищем по началу lowercaseTitle — индекс будет задействован
+    filter.lowercaseTitle = { $regex: `^${safe}` };
+
+    // Сначала популярные, потом самые новые
+    const cursor = this.programModel
+      .find(filter)
+      .sort({ views: -1, createdAt: -1 })
+      .limit(limit);
+
+    cursor.select({
+      title: 1,
+      slug: 1,
+      hours: 1,
+      views: 1,
+      category: 1,
+      categoryType: 1,
+      dpoSubcategory: 1,
+      createdAt: 1,
+    });
+
+    const items = await cursor.lean<AnyProgram[]>().exec();
+    const result = mapPrograms(items);
+
+    // Сохраняем в кэш
+    this.suggestCache.set(cacheKey, {
+      expires: now + this.SUGGEST_TTL_MS,
+      data: result,
+    });
+
+    return result;
   }
 }

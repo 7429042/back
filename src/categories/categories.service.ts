@@ -16,6 +16,12 @@ export class CategoriesService {
     private readonly categoryModel: Model<CategoryDocument>,
   ) {}
 
+  private readonly idsCache = new Map<
+    string,
+    { expires: number; ids: Types.ObjectId[] }
+  >();
+  private readonly IDS_TTL_MS = 60_000;
+
   private escapeRegExp(input: string) {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
@@ -31,6 +37,14 @@ export class CategoriesService {
       candidate = `${slug}-${i++}`;
     }
     return candidate;
+  }
+
+  createCacheKeyForIds(slug: string) {
+    return `ids:${this.normalizeSlug(slug)}`;
+  }
+
+  clearIdsCache() {
+    this.idsCache.clear();
   }
 
   async create(dto: CreateCategoryDto) {
@@ -65,13 +79,15 @@ export class CategoriesService {
       typeof (err as Record<string, unknown>).code === 'number';
 
     try {
-      return await this.categoryModel.create({
+      const created = await this.categoryModel.create({
         name: dto.name,
         slug: uniqueSlug,
         parent: parent?._id ?? undefined,
         path,
         depth,
       });
+      this.clearIdsCache();
+      return created;
     } catch (e) {
       if (hasMongoCode(e) && e.code === 11000) {
         throw new BadRequestException(
@@ -99,6 +115,15 @@ export class CategoriesService {
   async collectCategoryAndDescendantsIdsBySlug(
     slug: string,
   ): Promise<Types.ObjectId[]> {
+    const key = this.createCacheKeyForIds(slug);
+    const now = Date.now();
+    const cached = this.idsCache.get(key);
+    if (cached && cached.expires > now) {
+      return cached.ids;
+    } else if (cached) {
+      this.idsCache.delete(key);
+    }
+
     const normalized = this.normalizeSlug(slug);
     const cat = await this.categoryModel.findOne({ slug: normalized }).exec();
     if (!cat) {
@@ -110,6 +135,9 @@ export class CategoriesService {
       .find({ path: regex }, { _id: 1 })
       .lean()
       .exec();
-    return all.map((item) => item._id);
+    const ids = all.map((item) => new Types.ObjectId(item._id));
+
+    this.idsCache.set(key, { expires: now + this.IDS_TTL_MS, ids });
+    return ids;
   }
 }
