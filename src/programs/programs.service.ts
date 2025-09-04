@@ -195,17 +195,30 @@ export class ProgramsService {
       throw new NotFoundException('Program not found');
     }
 
-    const doc = incrementView
-      ? await this.programModel
-          .findByIdAndUpdate(id, { $inc: { views: 1 } }, { new: true })
-          .lean<AnyProgram>()
-          .exec()
-      : await this.programModel.findById(id).lean<AnyProgram>().exec();
+    const current = await this.programModel
+      .findById(id)
+      .lean<AnyProgram>()
+      .exec();
 
-    if (!doc) {
+    if (!current) {
       throw new NotFoundException('Program not found');
     }
-    return mapProgram(doc);
+
+    if (incrementView && current.status === 'published') {
+      const updated = await this.programModel
+        .findByIdAndUpdate(
+          id,
+          {
+            $inc: { views: 1 },
+          },
+          { new: true },
+        )
+        .lean<AnyProgram>()
+        .exec();
+
+      return mapProgram(updated ?? current);
+    }
+    return mapProgram(current);
   }
 
   async findOneBySlug(
@@ -215,24 +228,27 @@ export class ProgramsService {
     const incrementView = options?.incrementView ?? true;
     const normalized = this.normalizeSlug(slug);
 
-    const doc = incrementView
-      ? await this.programModel
-          .findOneAndUpdate(
-            { slug: normalized },
-            { $inc: { views: 1 } },
-            { new: true },
-          )
-          .lean<AnyProgram>()
-          .exec()
-      : await this.programModel
-          .findOne({ slug: normalized })
-          .lean<AnyProgram>()
-          .exec();
-
-    if (!doc) {
+    const current = await this.programModel
+      .findOne({ slug: normalized })
+      .lean<AnyProgram>()
+      .exec();
+    if (!current) {
       throw new NotFoundException('Program not found');
     }
-    return mapProgram(doc);
+
+    if (incrementView && current.status === 'published') {
+      const updated = await this.programModel
+        .findOneAndUpdate(
+          { slug: normalized },
+          { $inc: { views: 1 } },
+          { new: true },
+        )
+        .lean<AnyProgram>()
+        .exec();
+
+      return mapProgram(updated ?? current);
+    }
+    return mapProgram(current);
   }
 
   async publish(id: string): Promise<ProgramResponseDto> {

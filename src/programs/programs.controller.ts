@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -24,6 +25,10 @@ import {
   ProgramResponseDto,
   ProgramsSearchResponseDto,
 } from './dto/program-response.dto';
+import {
+  CurrentUser,
+  CurrentUserPayload,
+} from '../auth/decorators/current-user.decorator';
 
 @ApiTags('Programs')
 @Controller('programs')
@@ -85,7 +90,11 @@ export class ProgramsController {
     description: 'Направление сортировки',
     example: 'desc',
   })
-  async findAll(@Query() query: FindProgramsQueryDto) {
+  async findAll(
+    @Query() query: FindProgramsQueryDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    const isAdmin = user.role === 'admin';
     let categoryIds: Types.ObjectId[] | undefined = undefined;
     if (query.categorySlug) {
       categoryIds =
@@ -94,7 +103,7 @@ export class ProgramsController {
         );
     }
     return this.programsService.findAll({
-      status: query.status,
+      status: isAdmin ? query.status : 'published',
       limit: query.limit,
       offset: query.offset,
       categoryIds,
@@ -154,7 +163,11 @@ export class ProgramsController {
     description: 'Направление сортировки',
     example: 'desc',
   })
-  async search(@Query() query: FindProgramsQueryDto) {
+  async search(
+    @Query() query: FindProgramsQueryDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    const isAdmin = user.role === 'admin';
     let categoryIds: Types.ObjectId[] | undefined = undefined;
     if (query.categorySlug) {
       categoryIds =
@@ -168,7 +181,7 @@ export class ProgramsController {
       typeof rawText === 'string' ? rawText : undefined;
 
     return this.programsService.findAllWithMeta({
-      status: query.status,
+      status: isAdmin ? query.status : 'published',
       limit: query.limit,
       offset: query.offset,
       categoryIds,
@@ -182,18 +195,34 @@ export class ProgramsController {
   async findOneBySlug(
     @Param('slug') slug: string,
     @Query() query: GetProgramQueryDto,
+    @CurrentUser() user: CurrentUserPayload,
   ) {
+    const isAdmin = user.role === 'admin';
     const incrementView = query.incrementView ?? true;
-    return this.programsService.findOneBySlug(slug, { incrementView });
+    const res = await this.programsService.findOneBySlug(slug, {
+      incrementView,
+    });
+    if (!isAdmin && res.status === 'draft') {
+      throw new NotFoundException('Program not found');
+    }
+    return res;
   }
 
   @Get(':id')
   async findOneById(
     @Param() params: ParamIdDto,
     @Query() query: GetProgramQueryDto,
+    @CurrentUser() user: CurrentUserPayload,
   ) {
     const incrementView = query.incrementView ?? true;
-    return this.programsService.findOneById(params.id, { incrementView });
+    const isAdmin = user.role === 'admin';
+    const res = await this.programsService.findOneById(params.id, {
+      incrementView,
+    });
+    if (!isAdmin && res.status === 'draft') {
+      throw new NotFoundException('Program not found');
+    }
+    return res;
   }
 
   @ApiOkResponse({

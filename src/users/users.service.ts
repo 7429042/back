@@ -45,7 +45,7 @@ export class UsersService {
     await this.userModel.create({
       email: normalized,
       passwordHash,
-      role: 'admin',
+      role: Role.ADMIN,
       firstName: this.configService
         .get<string>('ADMIN_FIRST_NAME', 'Admin')
         .trim(),
@@ -65,9 +65,16 @@ export class UsersService {
         firstName: dto.firstName?.trim(),
         lastName: dto.lastName?.trim(),
       });
-      const obj = created.toObject();
-      Reflect.deleteProperty(obj, 'passwordHash');
-      return obj;
+      return {
+        id: String(created._id),
+        email: created.email,
+        firstName: created.firstName ?? null,
+        lastName: created.lastName ?? null,
+        role: created.role,
+        isBlocked: created.isBlocked,
+        createdAt: created['createdAt'] as Date | undefined,
+        updatedAt: created['updatedAt'] as Date | undefined,
+      };
     } catch (e) {
       if (e instanceof MongoServerError && e.code === 11000) {
         throw new BadRequestException(
@@ -115,16 +122,31 @@ export class UsersService {
   }
 
   async usersList(query: ListUsersQueryDto) {
-    const offset = query?.offset ?? 0;
-    const limit = query?.limit ?? 20;
-    const sortBy = query?.sortBy ?? 'createdAt';
-    const sortDirection = query?.sortDirection ?? -1;
+    // Безопасные дефолты и нормализация
+    const offset = Math.max(query?.offset ?? 0, 0);
+    const limit = Math.min(Math.max(query?.limit ?? 20, 1), 100);
 
+    type AllowedSort = 'createdAt' | 'updatedAt' | 'email';
+    const allowedSort: readonly AllowedSort[] = [
+      'createdAt',
+      'updatedAt',
+      'email',
+    ];
+    let sortBy: AllowedSort = 'createdAt';
+    if (query?.sortBy && allowedSort.includes(query.sortBy)) {
+      sortBy = query.sortBy;
+    }
+    const sortDirection: 1 | -1 =
+      query?.sortDirection === 1 || query?.sortDirection === -1
+        ? query.sortDirection
+        : -1;
+
+    // Фильтры
     const where: Record<string, unknown> = {};
     if (query?.role) {
       where.role = query.role;
     }
-    if (query?.isBlocked) {
+    if (typeof query?.isBlocked === 'boolean') {
       where.isBlocked = query.isBlocked;
     }
 
@@ -140,7 +162,7 @@ export class UsersService {
 
     const [items, total] = await Promise.all([
       this.userModel
-        .find({}, { passwordHash: 0 })
+        .find(where, { passwordHash: 0 })
         .sort({ [sortBy]: sortDirection })
         .skip(offset)
         .limit(limit)

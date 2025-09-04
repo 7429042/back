@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
+  ParseBoolPipe,
   Patch,
   Post,
   Query,
@@ -56,14 +58,15 @@ export class ApplicationsController {
       enum: ['true', 'false', '1', '0'],
     },
   })
+  @ApiBearerAuth()
   @ApiOkResponse({ type: ApplicationResponseDto })
   async findOneById(
     @Param('id') id: string,
-    @Query('withProgram') withProgram?: string,
+    @Query('withProgram', new ParseBoolPipe({ optional: true }))
+    withProgram?: boolean,
     @UserId() userId?: string,
   ): Promise<ApplicationResponseDto> {
-    const flag = withProgram === 'true' || withProgram === '1';
-    const app = await this.applicationsService.findOneById(id, flag);
+    const app = await this.applicationsService.findOneById(id, !!withProgram);
 
     if (app && userId && String(app.user) !== userId) {
       throw new ForbiddenException('Access denied');
@@ -154,12 +157,47 @@ export class ApplicationsController {
     return mapApplication(updated);
   }
 
+  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
+  @Patch(':id/items/:itemId/start-date/user')
+  @ApiOperation({
+    summary:
+      'Установить дату начала элемента (пользователь, только будущие даты)',
+  })
+  @ApiBearerAuth()
+  @ApiBody({ type: UpdateApplicationItemStartDateDto })
+  @ApiOkResponse({ type: ApplicationResponseDto })
+  async updateItemStartDateUser(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateApplicationItemStartDateDto,
+  ): Promise<ApplicationResponseDto> {
+    const updated = await this.applicationsService.updateItemStartDateAdmin(
+      id,
+      itemId,
+      dto.startDate,
+    );
+    return mapApplication(updated);
+  }
+
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/items/:itemId/clear-dates')
   @ApiOperation({ summary: 'Очистить даты элемента заявки (админ)' })
   @ApiBearerAuth()
   @ApiOkResponse({ type: ApplicationResponseDto })
   async clearItemDates(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+  ): Promise<ApplicationResponseDto> {
+    const updated = await this.applicationsService.clearItemDates(id, itemId);
+    return mapApplication(updated);
+  }
+
+  @UseGuards(JwtAuthGuard, OwnerOrAdminGuard)
+  @Delete(':id/items/:itemId/dates')
+  @ApiOperation({ summary: 'Очистить даты элемента заявки (пользователь)' })
+  @ApiBearerAuth()
+  @ApiOkResponse({ type: ApplicationResponseDto })
+  async clearItemDatesUser(
     @Param('id') id: string,
     @Param('itemId') itemId: string,
   ): Promise<ApplicationResponseDto> {
