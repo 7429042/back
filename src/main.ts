@@ -12,10 +12,20 @@ async function bootstrap() {
 
   app.use(cookieParser());
 
-  const origin = config.get<string | boolean>('CORS_ORIGIN') ?? true;
+  const corsOrigins = config.get<string>('CORS_ORIGIN_LIST');
+  // Можно задать через ENV как CSV: CORS_ORIGIN_LIST=https://your-frontend.com,http://localhost:3000
+  const originList = corsOrigins
+    ? corsOrigins
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : ['http://localhost:3000', 'http://localhost:4200'];
+
   app.enableCors({
-    origin,
+    origin: originList,
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   app.setGlobalPrefix('api');

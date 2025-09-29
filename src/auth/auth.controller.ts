@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Post,
   Req,
@@ -10,7 +12,6 @@ import {
 } from '@nestjs/common';
 import { AuthService, RevokeSessionResult } from './auth.service';
 import { LoginUserDto } from './dto/login-user.dto';
-import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -40,43 +41,43 @@ export class AuthController {
     };
   }
 
+  @HttpCode(HttpStatus.OK)
   @Post('login')
   async login(
     @Body() dto: LoginUserDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { user, accessToken, refreshToken } = await this.authService.login(
-      dto,
-      { ip: req.ip, userAgent: req.headers['user-agent'] },
-    );
-    res.cookie('refreshToken', refreshToken, this.getCookieOptions());
-    return { user, accessToken };
+    const meta = {
+      ip: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    };
+    const result = await this.authService.login(dto, meta, res);
+    return result; // { user }
   }
 
+  @HttpCode(HttpStatus.OK)
   @Post('refresh')
-  async refreshToken(
-    @Body() dto: RefreshTokenDto,
+  async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const fromCookie =
-      (req.cookies?.refreshToken as string | undefined) ?? null;
-    const token = fromCookie ?? dto?.refreshToken;
-    const { accessToken, refreshToken } = await this.authService.refreshToken(
-      token,
-      { ip: req.ip, userAgent: req.headers['user-agent'] },
-    );
-    res.cookie('refreshToken', refreshToken, this.getCookieOptions());
-    return { accessToken };
+    const refreshTokenFromCookie = (req.cookies?.['refresh_token'] ??
+      undefined) as string;
+    const meta = {
+      ip: req.ip,
+      userAgent: req.headers['user-agent'] as string,
+    };
+    await this.authService.refreshToken(refreshTokenFromCookie, meta, res);
+    return { success: true };
   }
 
+  @HttpCode(HttpStatus.OK)
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const token =
-      (req.cookies?.refreshToken as string | undefined) ?? undefined;
-    await this.authService.logout(token);
-    res.clearCookie('refreshToken', { path: '/' });
+    const refreshTokenFromCookie = (req.cookies?.['refresh_token'] ??
+      undefined) as string;
+    await this.authService.logout(refreshTokenFromCookie, res);
     return { success: true };
   }
 
@@ -88,7 +89,9 @@ export class AuthController {
     @UserId() userId: string,
   ) {
     await this.authService.logoutAll(userId);
-    res.clearCookie('refreshToken', { path: '/' });
+    // очистим куки текущей сессии
+    res.cookie('access_token', '', { httpOnly: true, path: '/', maxAge: 0 });
+    res.cookie('refresh_token', '', { httpOnly: true, path: '/', maxAge: 0 });
     return { success: true };
   }
 
@@ -109,7 +112,8 @@ export class AuthController {
       userId,
       jti,
     );
-    res.clearCookie('refreshToken', { path: '/' });
+    res.cookie('access_token', '', { httpOnly: true, path: '/', maxAge: 0 });
+    res.cookie('refresh_token', '', { httpOnly: true, path: '/', maxAge: 0 });
     return result;
   }
 }

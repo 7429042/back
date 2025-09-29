@@ -40,7 +40,7 @@ export class UsersController {
     @UserId() userId: string,
     @Body() dto: UpdatePasswordDto,
   ): Promise<ChangePasswordResult> {
-    return await this.usersService.changePassword(
+    return this.usersService.changePassword(
       userId,
       dto.oldPassword,
       dto.newPassword,
@@ -50,7 +50,7 @@ export class UsersController {
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Get()
   async usersList(@Query() query: ListUsersQueryDto) {
-    return this.usersService.usersList(query);
+    return await this.usersService.usersList(query);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)

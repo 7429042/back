@@ -18,6 +18,7 @@ import {
   RefreshSessionDocument,
 } from './schemas/refresh-session.schema';
 import { Model, Types } from 'mongoose';
+import type { Response, CookieOptions } from 'express';
 
 export type RevokeSessionResult = { success: true; message?: string };
 
@@ -39,6 +40,66 @@ export class AuthService {
     @InjectModel(RefreshSession.name)
     private readonly refreshSessionModel: Model<RefreshSessionDocument>,
   ) {}
+
+  private getCookieFlags() {
+    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
+    const secure = isProd
+      ? true
+      : this.configService.get<boolean>('COOKIE_SECURE', false);
+    const sameSite: CookieOptions['sameSite'] = isProd ? 'none' : 'lax';
+    const domain = this.configService.get<string>('COOKIE_DOMAIN') || undefined;
+    return { secure, sameSite, domain };
+  }
+
+  private getAccessMaxAgeMs() {
+    const ms = this.configService.get<number>('ACCESS_TOKEN_MAX_AGE_MS');
+    if (typeof ms === 'number') return ms;
+    return 15 * 60 * 1000;
+  }
+
+  private getRefreshMaxAgeMs() {
+    const ms = this.configService.get<number>('REFRESH_TOKEN_MAX_AGE_MS');
+    if (typeof ms === 'number') return ms;
+    return 30 * 24 * 60 * 60 * 1000;
+  }
+
+  private setAuthCookies(
+    res: Response,
+    accessToken: string,
+    refreshToken: string,
+  ) {
+    const { secure, sameSite, domain } = this.getCookieFlags();
+    const accessMaxAge = this.getAccessMaxAgeMs();
+    const refreshMaxAge = this.getRefreshMaxAgeMs();
+
+    const base: CookieOptions = {
+      httpOnly: true,
+      secure,
+      sameSite,
+      path: '/',
+      domain, // если undefined, Express не добавит домен
+    };
+
+    res.cookie('access_token', accessToken, { ...base, maxAge: accessMaxAge });
+    res.cookie('refresh_token', refreshToken, {
+      ...base,
+      maxAge: refreshMaxAge,
+    });
+  }
+
+  private clearAuthCookies(res: Response) {
+    const { secure, sameSite, domain } = this.getCookieFlags();
+    const base: CookieOptions = {
+      httpOnly: true,
+      secure,
+      sameSite,
+      path: '/',
+      domain,
+      maxAge: 0,
+    };
+    res.cookie('access_token', '', base);
+    res.cookie('refresh_token', '', base);
+  }
 
   private signAccessToken(payload: {
     sub: string;
@@ -133,7 +194,11 @@ export class AuthService {
     );
   }
 
-  async login(dto: LoginUserDto, meta?: { ip?: string; userAgent?: string }) {
+  async login(
+    dto: LoginUserDto,
+    meta?: { ip?: string; userAgent?: string },
+    res?: Response,
+  ) {
     const user = await this.usersService.findByEmail(dto.email);
     if (!user) throw new BadRequestException('Invalid email or password');
 
@@ -171,20 +236,25 @@ export class AuthService {
 
     const obj = user.toObject();
     Reflect.deleteProperty(obj, 'passwordHash');
+    if (res) this.setAuthCookies(res, accessToken, refreshToken);
     return {
       user: obj,
-      accessToken,
-      refreshToken,
     };
   }
 
   async refreshToken(
-    refreshToken: string,
+    refreshTokenFromCookie?: string,
     meta?: { ip?: string; userAgent?: string },
+    res?: Response,
   ) {
     const secret = this.configService.get<string>('JWT_REFRESH_SECRET');
     if (!secret) throw new Error('JWT_REFRESH_SECRET is not set\n');
     try {
+      const refreshToken = refreshTokenFromCookie;
+      if (!refreshToken) {
+        throw new UnauthorizedException('Invalid or expired refresh token');
+      }
+
       const decoded = await this.jwtService.verifyAsync<{
         sub: string;
         email?: string;
@@ -251,21 +321,30 @@ export class AuthService {
 
       await this.enforceSessionLimit(userObjectId);
 
-      return { accessToken, refreshToken: newRefreshToken };
+      if (res) {
+        this.setAuthCookies(res, accessToken, newRefreshToken);
+      }
+
+      return { success: true };
     } catch {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
   }
 
-  async logout(refreshToken?: string) {
-    if (!refreshToken) return { success: true };
-    const decoded: unknown = this.jwtService.decode(refreshToken);
-    const jti = this.isJwtWithJti(decoded) ? decoded.jti : undefined;
-    if (!jti) return { success: true };
-    await this.refreshSessionModel.updateOne(
-      { jti },
-      { $set: { revokedAt: new Date() } },
-    );
+  async logout(refreshTokenFromCookie?: string, res?: Response) {
+    if (refreshTokenFromCookie) {
+      const decoded: unknown = this.jwtService.decode(refreshTokenFromCookie);
+      const jti = this.isJwtWithJti(decoded) ? decoded.jti : undefined;
+      if (jti) {
+        await this.refreshSessionModel.updateOne(
+          { jti },
+          { $set: { revokedAt: new Date() } },
+        );
+      }
+    }
+    if (res) {
+      this.clearAuthCookies(res);
+    }
     return { success: true };
   }
 
