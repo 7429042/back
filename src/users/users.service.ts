@@ -3,6 +3,7 @@ import {
   forwardRef,
   Inject,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Role, User, UserDocument } from './schemas/userSchema';
@@ -15,6 +16,8 @@ import { ConfigService } from '@nestjs/config';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthService } from '../auth/auth.service';
 import { UpdateUserBlockDto } from './dto/update-user-block.dto';
+import { join } from 'path';
+import { unlink } from 'fs/promises';
 
 export type ChangePasswordResult = { success: true; hint?: string };
 
@@ -119,6 +122,53 @@ export class UsersService {
     await user.save();
     await this.authService.logoutAll(userId);
     return { success: true };
+  }
+
+  private async deleteAvatarFile(avatarUrl: string): Promise<void> {
+    try {
+      const avatarPath = join(process.cwd(), avatarUrl);
+      await unlink(avatarPath);
+    } catch (error) {
+      console.error('Ошибка удаления аватара:', error);
+    }
+  }
+
+  async updateAvatar(
+    userId: string,
+    filename: string,
+    userEmail: string,
+  ): Promise<{ avatarUrl: string }> {
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new NotFoundException('Пользователь не найден');
+    }
+
+    // Удаляем старый аватар, если есть
+    if (user.avatarUrl) {
+      await this.deleteAvatarFile(user.avatarUrl);
+    }
+
+    const safeEmail = userEmail.replace(/[@.]/g, '_');
+    const avatarUrl = `uploads/avatars/${safeEmail}/${filename}`;
+    user.avatarUrl = avatarUrl;
+    await user.save();
+
+    return { avatarUrl };
+  }
+
+  async deleteAvatar(userId: string): Promise<User> {
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new NotFoundException('Пользователь не найден');
+    }
+
+    if (user.avatarUrl) {
+      await this.deleteAvatarFile(user.avatarUrl);
+      user.avatarUrl = undefined;
+      await user.save();
+    }
+
+    return user;
   }
 
   async usersList(query: ListUsersQueryDto) {

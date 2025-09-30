@@ -27,6 +27,9 @@ export class User {
 
   @Prop({ required: false, default: false, index: true })
   isBlocked: boolean;
+
+  @Prop({ required: false, default: false, index: true })
+  avatarUrl?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
