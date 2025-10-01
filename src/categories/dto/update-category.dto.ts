@@ -2,11 +2,13 @@ import { IsOptional, IsString, Matches, MinLength } from 'class-validator';
 
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-export class CreateCategoryDto {
+export class UpdateCategoryDto {
+  @IsOptional()
   @IsString()
   @MinLength(2)
-  name: string;
+  name?: string;
 
+  // Allow changing slug if needed
   @IsOptional()
   @IsString()
   @Matches(slugPattern, {
@@ -14,6 +16,7 @@ export class CreateCategoryDto {
   })
   slug?: string;
 
+  // Allow changing parent by slug
   @IsOptional()
   @IsString()
   @Matches(slugPattern, {

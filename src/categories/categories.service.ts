@@ -47,6 +47,10 @@ export class CategoriesService {
     this.idsCache.clear();
   }
 
+  async findAll() {
+    return this.categoryModel.find().sort({ path: 1 }).lean().exec();
+  }
+
   async create(dto: CreateCategoryDto) {
     const name = dto.name.trim();
     const providedSlug = dto.slug?.trim();
@@ -98,6 +102,18 @@ export class CategoriesService {
     }
   }
 
+  async ensure(dto: CreateCategoryDto) {
+    const providedSlug = dto.slug?.trim() ?? this.normalizeSlug(dto.name);
+    const normalized = this.normalizeSlug(providedSlug);
+    const existing = await this.categoryModel
+      .findOne({ slug: normalized })
+      .lean()
+      .exec();
+    if (existing) return existing;
+    // If not exists, try to create
+    return this.create({ ...dto, slug: normalized });
+  }
+
   async findBySlug(slug: string) {
     const normalized = this.normalizeSlug(slug);
     const cat = await this.categoryModel
@@ -110,6 +126,128 @@ export class CategoriesService {
       );
     }
     return cat;
+  }
+
+  async updateBySlug(
+    slug: string,
+    data: Partial<{ name: string; slug: string; parentSlug: string }>,
+  ) {
+    const normalized = this.normalizeSlug(slug);
+    const current = await this.categoryModel
+      .findOne({ slug: normalized })
+      .exec();
+    if (!current) {
+      throw new NotFoundException(
+        `Category with slug "${normalized}" not found`,
+      );
+    }
+
+    const updates: Partial<
+      Pick<Category, 'name' | 'slug' | 'path' | 'depth'>
+    > & { parent?: Types.ObjectId } = {};
+
+    // Update name
+    if (typeof data.name === 'string') {
+      updates.name = data.name.trim();
+    }
+
+    // Resolve parent if changing
+    let parent: CategoryDocument | null = null;
+    let parentChanged = false;
+    if (typeof data.parentSlug === 'string') {
+      const parentSlugNorm = this.normalizeSlug(data.parentSlug);
+      parent = await this.categoryModel
+        .findOne({ slug: parentSlugNorm })
+        .exec();
+      if (!parent) {
+        throw new BadRequestException(
+          `Parent category with slug "${data.parentSlug}" not found`,
+        );
+      }
+      if (
+        !current.parent ||
+        parent._id.toString() !== current.parent.toString()
+      ) {
+        parentChanged = true;
+        updates.parent = parent._id;
+      }
+    } else if (data.parentSlug === null) {
+      // explicit set to root if passed null (not standard in DTO, but guard anyway)
+      updates.parent = undefined;
+      parentChanged = true;
+    }
+
+    // Determine new slug
+    let newSlug = current.slug;
+    if (typeof data.slug === 'string' && data.slug.trim().length > 0) {
+      const desired = this.normalizeSlug(data.slug);
+      if (desired !== current.slug) {
+        newSlug = await this.ensureUniqueSlug(desired);
+      }
+    }
+
+    // Compute new path/depth if needed
+    let newPath = current.path;
+    let newDepth = current['depth'];
+    if (parentChanged || newSlug !== current.slug) {
+      const base = parent
+        ? parent.path
+        : current.parent
+          ? ((await this.categoryModel.findById(current.parent).lean().exec())
+              ?.path ?? '')
+          : '';
+      const parentPath = parent ? parent.path : current.parent ? base : '';
+      newPath = parentPath ? `${parentPath}/${newSlug}` : newSlug;
+      newDepth = parent ? parent['depth'] + 1 : 0;
+    }
+
+    updates.slug = newSlug;
+    updates.path = newPath;
+    updates.depth = newDepth;
+
+    // Save current updates
+    const prevPath = current.path;
+    await this.categoryModel.updateOne({ _id: current._id }, updates).exec();
+
+    // If path changed, update descendants paths
+    if (prevPath !== newPath) {
+      const safePrev = this.escapeRegExp(prevPath);
+      const regex = new RegExp(`^${safePrev}(\\/|$)`);
+      const descendants = await this.categoryModel.find({ path: regex }).exec();
+      for (const doc of descendants) {
+        if (doc._id.equals(current._id)) continue;
+        const suffix = doc.path.substring(prevPath.length);
+        const updatedPath = `${newPath}${suffix}`;
+        const newDocDepth = updatedPath.split('/').length - 1; // root depth 0
+        await this.categoryModel
+          .updateOne(
+            { _id: doc._id },
+            { path: updatedPath, depth: newDocDepth },
+          )
+          .exec();
+      }
+    }
+
+    this.clearIdsCache();
+    return this.categoryModel.findById(current._id).lean().exec();
+  }
+
+  async deleteBySlug(slug: string) {
+    const normalized = this.normalizeSlug(slug);
+    const current = await this.categoryModel
+      .findOne({ slug: normalized })
+      .lean()
+      .exec();
+    if (!current) {
+      throw new NotFoundException(
+        `Category with slug "${normalized}" not found`,
+      );
+    }
+    const safePath = this.escapeRegExp(current.path);
+    const regex = new RegExp(`^${safePath}(\\/|$)`);
+    await this.categoryModel.deleteMany({ path: regex }).exec();
+    this.clearIdsCache();
+    return { deleted: true };
   }
 
   async collectCategoryAndDescendantsIdsBySlug(
