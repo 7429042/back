@@ -33,12 +33,15 @@ import * as Joi from 'joi';
         CORS_ORIGIN: Joi.alternatives()
           .try(Joi.string(), Joi.boolean())
           .optional(),
+        CORS_ORIGIN_LIST: Joi.string().optional(),
         COOKIE_DOMAIN: Joi.string().optional(),
         COOKIE_SECURE: Joi.boolean().default(true),
         COOKIE_SAMESITE: Joi.string()
           .valid('strict', 'lax', 'none')
           .default('lax'),
         REFRESH_MAX_SESSIONS: Joi.number().integer().min(1).max(50).default(5),
+        CATEGORIES_IDS_TTL_MS: Joi.number().integer().min(1000).default(60000),
+        CATEGORIES_CACHE_TTL_MS: Joi.number().integer().min(1000).default(120000),
       }),
     }),
     MongooseModule.forRootAsync({

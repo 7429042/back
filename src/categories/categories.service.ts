@@ -8,19 +8,60 @@ import { Category, CategoryDocument } from './schemas/category.schema';
 import { Model, Types } from 'mongoose';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import slugify from '@sindresorhus/slugify';
+import { ConfigService } from '@nestjs/config';
+
+export interface CategoryTreeNode {
+  _id: Types.ObjectId | string;
+  name: string;
+  slug: string;
+  path: string;
+  depth: number;
+  children: CategoryTreeNode[];
+}
+
+export interface CategorySearchResult {
+  name: string;
+  slug: string;
+  path: string;
+  depth: number;
+  score?: number;
+}
+
+// Lean representation of Category documents returned by Mongoose .lean()
+export type CategoryLean = {
+  _id: Types.ObjectId;
+  name: string;
+  slug: string;
+  parent?: Types.ObjectId;
+  path: string;
+  depth: number;
+};
 
 @Injectable()
 export class CategoriesService {
   constructor(
     @InjectModel(Category.name)
     private readonly categoryModel: Model<CategoryDocument>,
-  ) {}
+    private readonly config: ConfigService,
+  ) {
+    const ttl = Number(this.config.get('CATEGORIES_IDS_TTL_MS'));
+    this.IDS_TTL_MS = Number.isFinite(ttl) && ttl > 0 ? ttl : 60_000;
+    const readTtl = Number(this.config.get('CATEGORIES_CACHE_TTL_MS'));
+    this.READ_TTL_MS =
+      Number.isFinite(readTtl) && readTtl > 0 ? readTtl : 120_000;
+  }
 
   private readonly idsCache = new Map<
     string,
     { expires: number; ids: Types.ObjectId[] }
   >();
-  private readonly IDS_TTL_MS = 60_000;
+  private IDS_TTL_MS: number;
+
+  private readonly readCache = new Map<
+    string,
+    { expires: number; value: unknown }
+  >();
+  private READ_TTL_MS: number;
 
   private escapeRegExp(input: string) {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -47,8 +88,111 @@ export class CategoriesService {
     this.idsCache.clear();
   }
 
-  async findAll() {
-    return this.categoryModel.find().sort({ path: 1 }).lean().exec();
+  clearReadCache() {
+    this.readCache.clear();
+  }
+
+  async findAll(): Promise<CategoryLean[]> {
+    const key = 'read:all';
+    const now = Date.now();
+    const cached = this.readCache.get(key);
+    if (cached && cached.expires > now) return cached.value as CategoryLean[];
+    const res = await this.categoryModel
+      .find()
+      .sort({ path: 1 })
+      .lean<CategoryLean>()
+      .exec();
+    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: res });
+    return res;
+  }
+
+  async search(q: string, limit: number = 20): Promise<CategorySearchResult[]> {
+    const query = q ? q.trim() : '';
+    if (!query) return [];
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+
+    const key = `read:search:${query.toLowerCase()}:${safeLimit}`;
+    const now = Date.now();
+    const cached = this.readCache.get(key);
+    if (cached && cached.expires > now)
+      return cached.value as CategorySearchResult[];
+
+    let res: CategorySearchResult[] = [];
+    if (query.length >= 2) {
+      const regex = new RegExp(this.escapeRegExp(query), 'i');
+      const docs = await this.categoryModel
+        .find({ $or: [{ $text: { $search: query } }, { slug: regex }] }, {
+          name: 1,
+          slug: 1,
+          path: 1,
+          depth: 1,
+          score: { $meta: 'textScore' },
+        } as any)
+        .sort({ score: { $meta: 'textScore' } as any, path: 1 } as any)
+        .limit(safeLimit)
+        .lean<CategorySearchResult>()
+        .exec();
+      res = docs;
+    } else {
+      const regex = new RegExp(this.escapeRegExp(query), 'i');
+      const docs = await this.categoryModel
+        .find(
+          { $or: [{ name: regex }, { slug: regex }] },
+          { name: 1, slug: 1, path: 1, depth: 1 },
+        )
+        .sort({ path: 1 })
+        .limit(safeLimit)
+        .lean<CategorySearchResult>()
+        .exec();
+      res = docs;
+    }
+
+    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: res });
+    return res;
+  }
+
+  async getTree(): Promise<CategoryTreeNode[]> {
+    const key = 'read:tree';
+    const now = Date.now();
+    const cached = this.readCache.get(key);
+    if (cached && cached.expires > now)
+      return cached.value as CategoryTreeNode[];
+
+    const docs = await this.categoryModel
+      .find({}, { name: 1, slug: 1, path: 1, depth: 1, parent: 1 })
+      .sort({ path: 1 })
+      .lean<CategoryLean>()
+      .exec();
+
+    const byId = new Map<string, CategoryTreeNode>();
+    const roots: CategoryTreeNode[] = [];
+
+    for (const d of docs) {
+      const id = String(d._id);
+      byId.set(id, {
+        _id: d._id,
+        name: d.name,
+        slug: d.slug,
+        path: d.path,
+        depth:
+          d.depth ??
+          (typeof d.path === 'string' ? d.path.split('/').length - 1 : 0),
+        children: [],
+      });
+    }
+
+    for (const d of docs) {
+      const node = byId.get(String(d._id))!;
+      const parentId = d.parent ? String(d.parent) : null;
+      if (parentId && byId.has(parentId)) {
+        byId.get(parentId)!.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+
+    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: roots });
+    return roots;
   }
 
   async create(dto: CreateCategoryDto) {
@@ -91,6 +235,7 @@ export class CategoriesService {
         depth,
       });
       this.clearIdsCache();
+      this.clearReadCache();
       return created;
     } catch (e) {
       if (hasMongoCode(e) && e.code === 11000) {
@@ -107,7 +252,7 @@ export class CategoriesService {
     const normalized = this.normalizeSlug(providedSlug);
     const existing = await this.categoryModel
       .findOne({ slug: normalized })
-      .lean()
+      .lean<CategoryLean>()
       .exec();
     if (existing) return existing;
     // If not exists, try to create
@@ -118,7 +263,7 @@ export class CategoriesService {
     const normalized = this.normalizeSlug(slug);
     const cat = await this.categoryModel
       .findOne({ slug: normalized })
-      .lean()
+      .lean<CategoryLean>()
       .exec();
     if (!cat) {
       throw new NotFoundException(
@@ -126,6 +271,24 @@ export class CategoriesService {
       );
     }
     return cat;
+  }
+
+  async getBreadcrumbs(slug: string) {
+    const cat = await this.findBySlug(slug);
+    const parts = typeof cat.path === 'string' ? cat.path.split('/') : [];
+    const paths: string[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts.slice(0, i + 1).join('/');
+      if (p) paths.push(p);
+    }
+    if (paths.length === 0) return [];
+    const docs = await this.categoryModel
+      .find({ path: { $in: paths } }, { name: 1, slug: 1, path: 1, depth: 1 })
+      .lean<Omit<CategorySearchResult, 'score'>>()
+      .exec();
+    const order = new Map(paths.map((p, idx) => [p, idx] as const));
+    docs.sort((a, b) => (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0));
+    return docs;
   }
 
   async updateBySlug(
@@ -162,6 +325,19 @@ export class CategoriesService {
       if (!parent) {
         throw new BadRequestException(
           `Parent category with slug "${data.parentSlug}" not found`,
+        );
+      }
+      // Prevent self-parenting and descendant-parenting cycles
+      if (parent._id.equals(current._id)) {
+        throw new BadRequestException('Category cannot be its own parent');
+      }
+      const currentPath = current.path;
+      if (
+        parent.path === currentPath ||
+        parent.path.startsWith(currentPath + '/')
+      ) {
+        throw new BadRequestException(
+          'Category cannot assign its descendant as a parent',
         );
       }
       if (
@@ -229,6 +405,7 @@ export class CategoriesService {
     }
 
     this.clearIdsCache();
+    this.clearReadCache();
     return this.categoryModel.findById(current._id).lean().exec();
   }
 
@@ -236,7 +413,7 @@ export class CategoriesService {
     const normalized = this.normalizeSlug(slug);
     const current = await this.categoryModel
       .findOne({ slug: normalized })
-      .lean()
+      .lean<CategoryLean>()
       .exec();
     if (!current) {
       throw new NotFoundException(
@@ -247,6 +424,7 @@ export class CategoriesService {
     const regex = new RegExp(`^${safePath}(\\/|$)`);
     await this.categoryModel.deleteMany({ path: regex }).exec();
     this.clearIdsCache();
+    this.clearReadCache();
     return { deleted: true };
   }
 
@@ -271,7 +449,7 @@ export class CategoriesService {
     const regex = new RegExp(`^${safePath}(\\/|$)`);
     const all = await this.categoryModel
       .find({ path: regex }, { _id: 1 })
-      .lean()
+      .lean<{ _id: Types.ObjectId }>()
       .exec();
     const ids = all.map((item) => new Types.ObjectId(item._id));
 
