@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Category, CategoryDocument } from './schemas/category.schema';
@@ -38,7 +39,7 @@ export type CategoryLean = {
 };
 
 @Injectable()
-export class CategoriesService {
+export class CategoriesService implements OnModuleInit {
   constructor(
     @InjectModel(Category.name)
     private readonly categoryModel: Model<CategoryDocument>,
@@ -49,6 +50,36 @@ export class CategoriesService {
     const readTtl = Number(this.config.get('CATEGORIES_CACHE_TTL_MS'));
     this.READ_TTL_MS =
       Number.isFinite(readTtl) && readTtl > 0 ? readTtl : 120_000;
+  }
+
+  async onModuleInit() {
+    // Seed default categories hierarchy (idempotent)
+    try {
+      const root1Name = 'профессиональное обучение';
+      const root2Name = 'дополнительное профессиональное образование';
+      const root1Slug = this.normalizeSlug(root1Name);
+      const root2Slug = this.normalizeSlug(root2Name);
+
+      await this.ensure({ name: root1Name, slug: root1Slug });
+      await this.ensure({ name: root2Name, slug: root2Slug });
+
+      const child1Name = 'повышение квалификации';
+      const child2Name = 'профессиональная переподготовка';
+      await this.ensure({
+        name: child1Name,
+        slug: this.normalizeSlug(child1Name),
+        parentSlug: root2Slug,
+      });
+      await this.ensure({
+        name: child2Name,
+        slug: this.normalizeSlug(child2Name),
+        parentSlug: root2Slug,
+      });
+    } catch (e) {
+      // Avoid crashing app on startup because of seeding errors; log and continue
+      // eslint-disable-next-line no-console
+      console.warn('Category seeding failed:', e);
+    }
   }
 
   private readonly idsCache = new Map<
@@ -97,13 +128,13 @@ export class CategoriesService {
     const now = Date.now();
     const cached = this.readCache.get(key);
     if (cached && cached.expires > now) return cached.value as CategoryLean[];
-    const res = await this.categoryModel
-      .find()
-      .sort({ path: 1 })
-      .lean<CategoryLean>()
-      .exec();
-    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: res });
-    return res;
+    const res = await this.categoryModel.find().sort({ path: 1 }).lean().exec();
+    const resTyped = (res ?? []) as CategoryLean[];
+    this.readCache.set(key, {
+      expires: now + this.READ_TTL_MS,
+      value: resTyped,
+    });
+    return resTyped;
   }
 
   async search(q: string, limit: number = 20): Promise<CategorySearchResult[]> {
@@ -120,30 +151,38 @@ export class CategoriesService {
     let res: CategorySearchResult[] = [];
     if (query.length >= 2) {
       const regex = new RegExp(this.escapeRegExp(query), 'i');
-      const docs = await this.categoryModel
-        .find({ $or: [{ $text: { $search: query } }, { slug: regex }] }, {
-          name: 1,
-          slug: 1,
-          path: 1,
-          depth: 1,
-          score: { $meta: 'textScore' },
-        } as any)
-        .sort({ score: { $meta: 'textScore' } as any, path: 1 } as any)
+      const projection = {
+        name: 1,
+        slug: 1,
+        path: 1,
+        depth: 1,
+        score: { $meta: 'textScore' },
+      };
+      const sortCriteria = {
+        score: { $meta: 'textScore' },
+        path: 1,
+      } as const;
+      const docs = (await this.categoryModel
+        .find(
+          { $or: [{ $text: { $search: query } }, { slug: regex }] },
+          projection,
+        )
+        .sort(sortCriteria as Record<string, 1 | -1 | { $meta: string }>)
         .limit(safeLimit)
-        .lean<CategorySearchResult>()
-        .exec();
+        .lean()
+        .exec()) as CategorySearchResult[];
       res = docs;
     } else {
       const regex = new RegExp(this.escapeRegExp(query), 'i');
-      const docs = await this.categoryModel
+      const docs = (await this.categoryModel
         .find(
           { $or: [{ name: regex }, { slug: regex }] },
           { name: 1, slug: 1, path: 1, depth: 1 },
         )
         .sort({ path: 1 })
         .limit(safeLimit)
-        .lean<CategorySearchResult>()
-        .exec();
+        .lean()
+        .exec()) as CategorySearchResult[];
       res = docs;
     }
 
@@ -158,11 +197,11 @@ export class CategoriesService {
     if (cached && cached.expires > now)
       return cached.value as CategoryTreeNode[];
 
-    const docs = await this.categoryModel
+    const docs = (await this.categoryModel
       .find({}, { name: 1, slug: 1, path: 1, depth: 1, parent: 1 })
       .sort({ path: 1 })
-      .lean<CategoryLean>()
-      .exec();
+      .lean()
+      .exec()) as CategoryLean[];
 
     const byId = new Map<string, CategoryTreeNode>();
     const roots: CategoryTreeNode[] = [];
@@ -174,9 +213,7 @@ export class CategoriesService {
         name: d.name,
         slug: d.slug,
         path: d.path,
-        depth:
-          d.depth ??
-          (typeof d.path === 'string' ? d.path.split('/').length - 1 : 0),
+        depth: d.depth ?? (d.path ? d.path.split('/').length - 1 : 0),
         children: [],
       });
     }
@@ -282,10 +319,10 @@ export class CategoriesService {
       if (p) paths.push(p);
     }
     if (paths.length === 0) return [];
-    const docs = await this.categoryModel
+    const docs = (await this.categoryModel
       .find({ path: { $in: paths } }, { name: 1, slug: 1, path: 1, depth: 1 })
-      .lean<Omit<CategorySearchResult, 'score'>>()
-      .exec();
+      .lean()
+      .exec()) as Omit<CategorySearchResult, 'score'>[];
     const order = new Map(paths.map((p, idx) => [p, idx] as const));
     docs.sort((a, b) => (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0));
     return docs;
@@ -447,11 +484,11 @@ export class CategoriesService {
     }
     const safePath = this.escapeRegExp(cat.path);
     const regex = new RegExp(`^${safePath}(\\/|$)`);
-    const all = await this.categoryModel
+    const all = (await this.categoryModel
       .find({ path: regex }, { _id: 1 })
-      .lean<{ _id: Types.ObjectId }>()
-      .exec();
-    const ids = all.map((item) => new Types.ObjectId(item._id));
+      .lean()
+      .exec()) as { _id: Types.ObjectId }[];
+    const ids = (all ?? []).map((item) => new Types.ObjectId(item._id));
 
     this.idsCache.set(key, { expires: now + this.IDS_TTL_MS, ids });
     return ids;
