@@ -24,23 +24,6 @@ export class AuthController {
     private readonly configService: ConfigService,
   ) {}
 
-  private getCookieOptions() {
-    const secure = this.configService.get<boolean>('COOKIE_SECURE') ?? true;
-    const sameSite =
-      this.configService.get<'strict' | 'lax' | 'none'>('COOKIE_SAMESITE') ??
-      'lax';
-    const domain = this.configService.get<string>('COOKIE_DOMAIN');
-    const maxAge = 30 * 24 * 60 * 60 * 1000;
-    return {
-      httpOnly: true,
-      secure,
-      sameSite,
-      domain,
-      path: '/',
-      maxAge,
-    };
-  }
-
   @HttpCode(HttpStatus.OK)
   @Post('login')
   async login(
@@ -52,8 +35,8 @@ export class AuthController {
       ip: req.ip,
       userAgent: req.headers['user-agent'] as string,
     };
-    const result = await this.authService.login(dto, meta, res);
-    return result; // { user }
+
+    return await this.authService.login(dto, meta, res); // { user }
   }
 
   @HttpCode(HttpStatus.OK)
@@ -89,9 +72,7 @@ export class AuthController {
     @UserId() userId: string,
   ) {
     await this.authService.logoutAll(userId);
-    // очистим куки текущей сессии
-    res.cookie('access_token', '', { httpOnly: true, path: '/', maxAge: 0 });
-    res.cookie('refresh_token', '', { httpOnly: true, path: '/', maxAge: 0 });
+    this.authService.clearAuthCookies(res);
     return { success: true };
   }
 
@@ -112,8 +93,7 @@ export class AuthController {
       userId,
       jti,
     );
-    res.cookie('access_token', '', { httpOnly: true, path: '/', maxAge: 0 });
-    res.cookie('refresh_token', '', { httpOnly: true, path: '/', maxAge: 0 });
+    this.authService.clearAuthCookies(res);
     return result;
   }
 }

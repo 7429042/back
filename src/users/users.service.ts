@@ -18,6 +18,7 @@ import { AuthService } from '../auth/auth.service';
 import { UpdateUserBlockDto } from './dto/update-user-block.dto';
 import { join } from 'path';
 import { unlink } from 'fs/promises';
+import { AdminCreateUserDto } from './dto/admin-create-user.dto';
 
 export type ChangePasswordResult = { success: true; hint?: string };
 
@@ -35,6 +36,10 @@ export class UsersService {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  private getBcryptRounds(): number {
+    return this.configService.get<number>('BCRYPT_ROUNDS', 10);
+  }
+
   async onModuleInit() {
     const email = this.configService.get<string>('ADMIN_EMAIL');
     const password = this.configService.get<string>('ADMIN_PASSWORD');
@@ -44,7 +49,7 @@ export class UsersService {
     const exist = await this.userModel.exists({ email: normalized });
     if (exist) return;
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, this.getBcryptRounds());
     await this.userModel.create({
       email: normalized,
       passwordHash,
@@ -60,7 +65,10 @@ export class UsersService {
 
   async create(dto: CreateUserDto) {
     const email = dto.email.toLowerCase().trim();
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordHash = await bcrypt.hash(
+      dto.password,
+      this.getBcryptRounds(),
+    );
     try {
       const created = await this.userModel.create({
         email,
@@ -118,7 +126,7 @@ export class UsersService {
     if (!isMatch) {
       throw new BadRequestException('Old password is incorrect');
     }
-    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    user.passwordHash = await bcrypt.hash(newPassword, this.getBcryptRounds());
     await user.save();
     await this.authService.logoutAll(userId);
     return { success: true };
@@ -149,7 +157,7 @@ export class UsersService {
     }
 
     const safeEmail = userEmail.replace(/[@.]/g, '_');
-    const avatarUrl = `uploads/avatars/${safeEmail}/${filename}`;
+    const avatarUrl = join('uploads', 'avatars', safeEmail, filename);
     user.avatarUrl = avatarUrl;
     await user.save();
 
@@ -240,7 +248,7 @@ export class UsersService {
 
   async findAdminById(id: string) {
     return await this.userModel
-      .findById(new Types.ObjectId(id))
+      .findById(id)
       .select('-passwordHash')
       .lean()
       .exec();
@@ -294,6 +302,29 @@ export class UsersService {
       throw new BadRequestException('User not found');
     }
     return updated;
+  }
+
+  async createByAdmin(dto: AdminCreateUserDto) {
+    const email = dto.email.toLowerCase().trim();
+    const exist = await this.userModel.findOne({ email }).lean().exec();
+    if (exist) throw new BadRequestException('Email already in use');
+
+    const passwordHash = await bcrypt.hash(
+      dto.password,
+      this.getBcryptRounds(),
+    );
+    const doc = await this.userModel.create({
+      email,
+      passwordHash,
+      firstName: dto.firstName?.trim(),
+      lastName: dto.lastName?.trim(),
+      role: dto.role ?? Role.USER,
+      isBlocked: !!dto.isBlocked,
+    });
+
+    const obj = doc.toObject();
+    Reflect.deleteProperty(obj, 'passwordHash');
+    return obj;
   }
 
   async setBlockByAdmin(id: string, dto: UpdateUserBlockDto) {

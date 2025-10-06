@@ -28,7 +28,7 @@ export class User {
   @Prop({ required: false, default: false, index: true })
   isBlocked: boolean;
 
-  @Prop({ required: false, default: false, index: true })
+  @Prop({ required: false })
   avatarUrl?: string;
 }
 

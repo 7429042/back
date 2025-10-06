@@ -87,7 +87,7 @@ export class AuthService {
     });
   }
 
-  private clearAuthCookies(res: Response) {
+  public clearAuthCookies(res: Response) {
     const { secure, sameSite, domain } = this.getCookieFlags();
     const base: CookieOptions = {
       httpOnly: true,
@@ -99,6 +99,10 @@ export class AuthService {
     };
     res.cookie('access_token', '', base);
     res.cookie('refresh_token', '', base);
+  }
+
+  private getBcryptRounds(): number {
+    return this.configService.get<number>('BCRYPT_ROUNDS', 10);
   }
 
   private signAccessToken(payload: {
@@ -221,10 +225,8 @@ export class AuthService {
     const expiresAt = this.decodeExpToDate(refreshToken);
     const tokenHash = await bcrypt.hash(refreshToken, 10);
 
-    const userObjectId = new Types.ObjectId(user._id);
-
     await this.refreshSessionModel.create({
-      user: new Types.ObjectId(user._id),
+      user: user._id,
       jti,
       tokenHash,
       expiresAt,
@@ -232,7 +234,7 @@ export class AuthService {
       ip: meta?.ip,
     });
 
-    await this.enforceSessionLimit(userObjectId);
+    await this.enforceSessionLimit(user._id);
 
     const obj = user.toObject();
     Reflect.deleteProperty(obj, 'passwordHash');

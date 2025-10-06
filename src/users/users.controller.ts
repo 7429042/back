@@ -30,6 +30,7 @@ import {
   ApiOperation,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { AdminCreateUserDto } from './dto/admin-create-user.dto';
 
 @Controller('users')
 export class UsersController {
@@ -133,5 +134,11 @@ export class UsersController {
   @Delete(':id')
   async deleteUser(@Param('id') id: string) {
     return this.usersService.deleteByAdmin(id);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @Post('admin')
+  async adminCreate(@Body() dto: AdminCreateUserDto) {
+    return this.usersService.createByAdmin(dto);
   }
 }
