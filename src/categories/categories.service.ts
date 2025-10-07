@@ -5,21 +5,17 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Category, CategoryDocument } from './schemas/category.schema';
+import {
+  Category,
+  CategoryDocument,
+  ParentCategory,
+  ParentCategoryDocument,
+} from './schemas/category.schema';
 import { Model, Types } from 'mongoose';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import slugify from '@sindresorhus/slugify';
 import { ConfigService } from '@nestjs/config';
 import { rmSync } from 'node:fs';
-
-export interface CategoryTreeNode {
-  _id: Types.ObjectId | string;
-  name: string;
-  slug: string;
-  path: string;
-  depth: number;
-  children: CategoryTreeNode[];
-}
 
 export interface CategorySearchResult {
   name: string;
@@ -36,7 +32,6 @@ export type CategoryLean = {
   slug: string;
   parent?: Types.ObjectId;
   path: string;
-  depth: number;
 };
 
 @Injectable()
@@ -44,6 +39,8 @@ export class CategoriesService implements OnModuleInit {
   constructor(
     @InjectModel(Category.name)
     private readonly categoryModel: Model<CategoryDocument>,
+    @InjectModel(ParentCategory.name)
+    private readonly parentCategoryModel: Model<ParentCategoryDocument>,
     private readonly config: ConfigService,
   ) {
     const ttl = Number(this.config.get('CATEGORIES_IDS_TTL_MS'));
@@ -53,32 +50,64 @@ export class CategoriesService implements OnModuleInit {
       Number.isFinite(readTtl) && readTtl > 0 ? readTtl : 120_000;
   }
 
+  private async resolveParentBySlug(
+    parentSlug: string,
+  ): Promise<
+    | { model: 'ParentCategory'; doc: ParentCategoryDocument }
+    | { model: 'Category'; doc: CategoryDocument }
+    | null
+  > {
+    const normalized = this.normalizeSlug(parentSlug);
+    const pRoot = await this.parentCategoryModel
+      .findOne({ slug: normalized })
+      .exec();
+    if (pRoot) return { model: 'ParentCategory', doc: pRoot };
+    const pCat = await this.categoryModel.findOne({ slug: normalized }).exec();
+    if (pCat) return { model: 'Category', doc: pCat };
+    return null;
+  }
+
   async onModuleInit() {
-    // Seed default categories hierarchy (idempotent)
     try {
-      const root1Name = 'профессиональное обучение';
-      const root2Name = 'дополнительное профессиональное образование';
+      const root1Name = 'Профессиональное обучение';
+      const root2Name = 'Дополнительное профессиональное образование';
       const root1Slug = this.normalizeSlug(root1Name);
       const root2Slug = this.normalizeSlug(root2Name);
 
-      await this.ensure({ name: root1Name, slug: root1Slug });
-      await this.ensure({ name: root2Name, slug: root2Slug });
-
-      const child1Name = 'повышение квалификации';
-      const child2Name = 'профессиональная переподготовка';
-      await this.ensure({
-        name: child1Name,
-        slug: this.normalizeSlug(child1Name),
-        parentSlug: root2Slug,
-      });
-      await this.ensure({
-        name: child2Name,
-        slug: this.normalizeSlug(child2Name),
-        parentSlug: root2Slug,
-      });
+      // Идемпотентно создать корни в ParentCategory
+      await this.parentCategoryModel.updateOne(
+        { slug: root1Slug },
+        { $setOnInsert: { name: root1Name, slug: root1Slug, depth: 0 } },
+        { upsert: true },
+      );
+      await this.parentCategoryModel.updateOne(
+        { slug: root2Slug },
+        { $setOnInsert: { name: root2Name, slug: root2Slug, depth: 0 } },
+        { upsert: true },
+      );
+      const child1Name = 'Повышение квалификации';
+      const child2Name = 'Профессиональная переподготовка';
+      const pRoot2 = await this.parentCategoryModel
+        .findOne({ slug: root2Slug })
+        .exec();
+      if (pRoot2) {
+        for (const name of [child1Name, child2Name]) {
+          const slug = this.normalizeSlug(name);
+          const exists = await this.categoryModel.exists({ slug });
+          if (!exists) {
+            const path = `${pRoot2.slug}/${slug}`;
+            await this.categoryModel.create({
+              name,
+              slug,
+              parentModel: 'ParentCategory',
+              parent: pRoot2._id,
+              path,
+              depth: Math.max(0, path.split('/').length - 1),
+            });
+          }
+        }
+      }
     } catch (e) {
-      // Avoid crashing app on startup because of seeding errors; log and continue
-
       console.warn('Category seeding failed:', e);
     }
   }
@@ -195,73 +224,36 @@ export class CategoriesService implements OnModuleInit {
     return res;
   }
 
-  async getTree(): Promise<CategoryTreeNode[]> {
-    const key = 'read:tree';
-    const now = Date.now();
-    const cached = this.readCache.get(key);
-    if (cached && cached.expires > now)
-      return cached.value as CategoryTreeNode[];
-
-    const docs = (await this.categoryModel
-      .find({}, { name: 1, slug: 1, path: 1, depth: 1, parent: 1 })
-      .sort({ path: 1 })
-      .lean()
-      .exec()) as CategoryLean[];
-
-    const byId = new Map<string, CategoryTreeNode>();
-    const roots: CategoryTreeNode[] = [];
-
-    for (const d of docs) {
-      const id = String(d._id);
-      byId.set(id, {
-        _id: d._id,
-        name: d.name,
-        slug: d.slug,
-        path: d.path,
-        depth: d.depth ?? (d.path ? d.path.split('/').length - 1 : 0),
-        children: [],
-      });
-    }
-
-    for (const d of docs) {
-      const node = byId.get(String(d._id))!;
-      const parentId = d.parent ? String(d.parent) : null;
-      if (parentId && byId.has(parentId)) {
-        byId.get(parentId)!.children.push(node);
-      } else {
-        roots.push(node);
-      }
-    }
-
-    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: roots });
-    return roots;
-  }
-
   async create(dto: CreateCategoryDto) {
     const name = dto.name.trim();
     const providedSlug = dto.slug?.trim();
 
-    let parent: CategoryDocument | null = null;
+    let parentModel: 'ParentCategory' | 'Category' | undefined;
+    let parentDoc: ParentCategoryDocument | CategoryDocument | null = null;
+
     if (dto.parentSlug) {
-      const normalizedParentSlug = this.normalizeSlug(dto.parentSlug);
-      parent = await this.categoryModel
-        .findOne({ slug: normalizedParentSlug })
-        .exec();
-      if (!parent) {
+      const resolved = await this.resolveParentBySlug(dto.parentSlug);
+      if (!resolved) {
         throw new BadRequestException(
-          `Parent category with slug "${dto.parentSlug}" not found`,
+          `Parent with slug "${dto.parentSlug}" not found`,
         );
       }
+      parentModel = resolved.model;
+      parentDoc = resolved.doc;
     }
-
     const rawSlugSource =
       providedSlug && providedSlug.length > 0 ? providedSlug : name;
     const normalized = this.normalizeSlug(rawSlugSource);
     const uniqueSlug = await this.ensureUniqueSlug(normalized);
 
-    const path = parent ? `${parent.path}/${uniqueSlug}` : uniqueSlug;
-    const depth = parent ? parent['depth'] + 1 : 0;
+    const basePath = parentDoc
+      ? parentModel === 'ParentCategory'
+        ? (parentDoc as ParentCategoryDocument).slug
+        : (parentDoc as CategoryDocument).path
+      : '';
+    const path = basePath ? `${basePath}/${uniqueSlug}` : uniqueSlug;
 
+    // Type guard to safely detect Mongo duplicate key errors
     const hasMongoCode = (err: unknown): err is { code: number } =>
       typeof err === 'object' &&
       err !== null &&
@@ -270,16 +262,17 @@ export class CategoriesService implements OnModuleInit {
 
     try {
       const created = await this.categoryModel.create({
-        name: dto.name,
+        name,
         slug: uniqueSlug,
-        parent: parent?._id ?? undefined,
+        parentModel,
+        parent: parentDoc?._id,
         path,
-        depth,
+        depth: Math.max(0, path.split('/').length - 1),
       });
       this.clearIdsCache();
       this.clearReadCache();
       return created;
-    } catch (e) {
+    } catch (e: unknown) {
       if (hasMongoCode(e) && e.code === 11000) {
         throw new BadRequestException(
           `Category with slug "${uniqueSlug}" already exists`,
@@ -315,24 +308,6 @@ export class CategoriesService implements OnModuleInit {
     return cat;
   }
 
-  async getBreadcrumbs(slug: string) {
-    const cat = await this.findBySlug(slug);
-    const parts = typeof cat.path === 'string' ? cat.path.split('/') : [];
-    const paths: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const p = parts.slice(0, i + 1).join('/');
-      if (p) paths.push(p);
-    }
-    if (paths.length === 0) return [];
-    const docs = (await this.categoryModel
-      .find({ path: { $in: paths } }, { name: 1, slug: 1, path: 1, depth: 1 })
-      .lean()
-      .exec()) as Omit<CategorySearchResult, 'score'>[];
-    const order = new Map(paths.map((p, idx) => [p, idx] as const));
-    docs.sort((a, b) => (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0));
-    return docs;
-  }
-
   async updateBySlug(
     slug: string,
     data: Partial<{ name: string; slug: string; parentSlug: string }>,
@@ -348,54 +323,58 @@ export class CategoriesService implements OnModuleInit {
     }
 
     const updates: Partial<
-      Pick<Category, 'name' | 'slug' | 'path' | 'depth'>
-    > & { parent?: Types.ObjectId } = {};
+      Pick<Category, 'name' | 'slug' | 'path' | 'parent' | 'parentModel'>
+    > = {};
 
-    // Update name
     if (typeof data.name === 'string') {
       updates.name = data.name.trim();
     }
-
-    // Resolve parent if changing
-    let parent: CategoryDocument | null = null;
+    let newParentDoc: ParentCategoryDocument | CategoryDocument | null = null;
+    let newParentModel: 'ParentCategory' | 'Category' | undefined;
     let parentChanged = false;
+
     if (typeof data.parentSlug === 'string') {
-      const parentSlugNorm = this.normalizeSlug(data.parentSlug);
-      parent = await this.categoryModel
-        .findOne({ slug: parentSlugNorm })
-        .exec();
-      if (!parent) {
+      const resolved = await this.resolveParentBySlug(data.parentSlug);
+      if (!resolved) {
         throw new BadRequestException(
-          `Parent category with slug "${data.parentSlug}" not found`,
+          `Parent with slug "${data.parentSlug}" not found`,
         );
       }
-      // Prevent self-parenting and descendant-parenting cycles
-      if (parent._id.equals(current._id)) {
-        throw new BadRequestException('Category cannot be its own parent');
-      }
-      const currentPath = current.path;
-      if (
-        parent.path === currentPath ||
-        parent.path.startsWith(currentPath + '/')
-      ) {
-        throw new BadRequestException(
-          'Category cannot assign its descendant as a parent',
-        );
+      newParentDoc = resolved.doc;
+      newParentModel = resolved.model;
+
+      if (newParentModel === 'Category') {
+        const parentCat = newParentDoc as CategoryDocument;
+        if (parentCat._id.equals(current._id)) {
+          throw new BadRequestException('Category cannot be its own parent');
+        }
+        const currentPath = current.path;
+        if (
+          parentCat.path === currentPath ||
+          parentCat.path.startsWith(currentPath + '/')
+        ) {
+          throw new BadRequestException(
+            'Cannot assign a descendant as a parent',
+          );
+        }
       }
       if (
         !current.parent ||
-        parent._id.toString() !== current.parent.toString()
+        !current.parentModel ||
+        current.parent.toString() !== newParentDoc._id.toString() ||
+        current.parentModel !== newParentModel
       ) {
         parentChanged = true;
-        updates.parent = parent._id;
+        updates.parent = newParentDoc._id;
+        updates.parentModel = newParentModel;
       }
     } else if (data.parentSlug === null) {
-      // explicit set to root if passed null (not standard in DTO, but guard anyway)
+      // Сделать корневой относительно дерева ParentCategory/Category
       updates.parent = undefined;
+      updates.parentModel = undefined;
       parentChanged = true;
     }
 
-    // Determine new slug
     let newSlug = current.slug;
     if (typeof data.slug === 'string' && data.slug.trim().length > 0) {
       const desired = this.normalizeSlug(data.slug);
@@ -403,40 +382,46 @@ export class CategoriesService implements OnModuleInit {
         newSlug = await this.ensureUniqueSlug(desired);
       }
     }
-
-    // Compute new path/depth if needed
     let newPath = current.path;
-    let newDepth = current['depth'];
     if (parentChanged || newSlug !== current.slug) {
-      const base = parent
-        ? parent.path
+      const basePath = newParentDoc
+        ? newParentModel === 'ParentCategory'
+          ? (newParentDoc as ParentCategoryDocument).slug
+          : (newParentDoc as CategoryDocument).path
         : current.parent
-          ? ((await this.categoryModel.findById(current.parent).lean().exec())
-              ?.path ?? '')
+          ? await (async () => {
+              if (current.parentModel === 'ParentCategory') {
+                const p = await this.parentCategoryModel
+                  .findById(current.parent)
+                  .lean()
+                  .exec();
+                return p?.slug ?? '';
+              }
+              const p = await this.categoryModel
+                .findById(current.parent)
+                .lean()
+                .exec();
+              return p?.path ?? '';
+            })()
           : '';
-      const parentPath = parent ? parent.path : current.parent ? base : '';
-      newPath = parentPath ? `${parentPath}/${newSlug}` : newSlug;
-      newDepth = parent ? parent['depth'] + 1 : 0;
-    }
 
+      newPath = basePath ? `${basePath}/${newSlug}` : newSlug;
+    }
     updates.slug = newSlug;
     updates.path = newPath;
-    updates.depth = newDepth;
 
-    // Save current updates
     const prevPath = current.path;
     await this.categoryModel.updateOne({ _id: current._id }, updates).exec();
 
-    // If path changed, update descendants paths
     if (prevPath !== newPath) {
       const safePrev = this.escapeRegExp(prevPath);
-      const regex = new RegExp(`^${safePrev}(\\/|$)`);
+      const regex = new RegExp(`^${safePrev}(/|$)`);
       const descendants = await this.categoryModel.find({ path: regex }).exec();
       for (const doc of descendants) {
         if (doc._id.equals(current._id)) continue;
         const suffix = doc.path.substring(prevPath.length);
         const updatedPath = `${newPath}${suffix}`;
-        const newDocDepth = updatedPath.split('/').length - 1; // root depth 0
+        const newDocDepth = Math.max(0, updatedPath.split('/').length - 1);
         await this.categoryModel
           .updateOne(
             { _id: doc._id },
@@ -445,7 +430,6 @@ export class CategoriesService implements OnModuleInit {
           .exec();
       }
     }
-
     this.clearIdsCache();
     this.clearReadCache();
     return this.categoryModel.findById(current._id).lean().exec();

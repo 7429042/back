@@ -42,12 +42,6 @@ export class CategoriesController {
     return this.categoriesService.findAll();
   }
 
-  @Get('tree')
-  @ApiOperation({ summary: 'Дерево категорий' })
-  getTree() {
-    return this.categoriesService.getTree();
-  }
-
   @Get('search')
   @ApiOperation({ summary: 'Поиск категорий' })
   @ApiQuery({
@@ -135,13 +129,6 @@ export class CategoriesController {
   @ApiParam({ name: 'slug' })
   remove(@Param('slug') slug: string) {
     return this.categoriesService.deleteBySlug(slug);
-  }
-
-  @Get(':slug/breadcrumbs')
-  @ApiOperation({ summary: 'Хлебные крошки для категории' })
-  @ApiParam({ name: 'slug' })
-  getBreadcrumbs(@Param('slug') slug: string) {
-    return this.categoriesService.getBreadcrumbs(slug);
   }
 
   @Get(':slug/ids')
