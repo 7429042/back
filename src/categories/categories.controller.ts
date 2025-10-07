@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -192,7 +193,7 @@ export class CategoriesController {
     return this.categoriesService.clearImage(slug);
   }
 
-  @Get(':slug')
+  @Patch(':slug/views')
   @ApiOperation({ summary: 'Получить категорию по слагу учитывая просмотр' })
   @ApiParam({ name: 'slug' })
   async visit(@Param('slug') slug: string) {

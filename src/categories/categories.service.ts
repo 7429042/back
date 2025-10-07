@@ -11,7 +11,6 @@ import { CreateCategoryDto } from './dto/create-category.dto';
 import slugify from '@sindresorhus/slugify';
 import { ConfigService } from '@nestjs/config';
 import { rmSync } from 'node:fs';
-import e from 'express';
 
 export interface CategoryTreeNode {
   _id: Types.ObjectId | string;
