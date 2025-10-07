@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { HealthModule } from './health/health.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
 import { MongoConnectionLogger } from './common/logging/mongo-connection.logger';
 import { CategoriesModule } from './categories/categories.module';
 import { ProgramsModule } from './programs/programs.module';
@@ -12,6 +13,7 @@ import { ApplicationsModule } from './applications/applications.module';
 import { AuthModule } from './auth/auth.module';
 import { CartModule } from './cart/cart.module';
 import * as Joi from 'joi';
+import { join } from 'path';
 
 @Module({
   imports: [
@@ -41,7 +43,10 @@ import * as Joi from 'joi';
           .default('lax'),
         REFRESH_MAX_SESSIONS: Joi.number().integer().min(1).max(50).default(5),
         CATEGORIES_IDS_TTL_MS: Joi.number().integer().min(1000).default(60000),
-        CATEGORIES_CACHE_TTL_MS: Joi.number().integer().min(1000).default(120000),
+        CATEGORIES_CACHE_TTL_MS: Joi.number()
+          .integer()
+          .min(1000)
+          .default(120000),
       }),
     }),
     MongooseModule.forRootAsync({
@@ -49,6 +54,10 @@ import * as Joi from 'joi';
       useFactory: (config: ConfigService) => ({
         uri: config.get<string>('MONGODB_URI'),
       }),
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'uploads'),
+      serveRoot: '/uploads',
     }),
     HealthModule,
     CategoriesModule,

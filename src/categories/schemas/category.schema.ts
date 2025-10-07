@@ -19,6 +19,12 @@ export class Category {
 
   @Prop({ required: true, default: 0 })
   depth: number;
+
+  @Prop({ required: false })
+  imageUrl?: string;
+
+  @Prop({ required: true, default: 0 })
+  views: number;
 }
 
 export const CategorySchema = SchemaFactory.createForClass(Category);

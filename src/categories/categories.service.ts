@@ -10,6 +10,8 @@ import { Model, Types } from 'mongoose';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import slugify from '@sindresorhus/slugify';
 import { ConfigService } from '@nestjs/config';
+import { rmSync } from 'node:fs';
+import e from 'express';
 
 export interface CategoryTreeNode {
   _id: Types.ObjectId | string;
@@ -77,7 +79,7 @@ export class CategoriesService implements OnModuleInit {
       });
     } catch (e) {
       // Avoid crashing app on startup because of seeding errors; log and continue
-      // eslint-disable-next-line no-console
+
       console.warn('Category seeding failed:', e);
     }
   }
@@ -121,6 +123,10 @@ export class CategoriesService implements OnModuleInit {
 
   clearReadCache() {
     this.readCache.clear();
+  }
+
+  private buildCategoryImageUrl(slug: string, filename: string) {
+    return `/uploads/categories/${slug}/${filename}`;
   }
 
   async findAll(): Promise<CategoryLean[]> {
@@ -492,5 +498,42 @@ export class CategoriesService implements OnModuleInit {
 
     this.idsCache.set(key, { expires: now + this.IDS_TTL_MS, ids });
     return ids;
+  }
+
+  async setImage(slug: string, filename: string) {
+    const cat = await this.categoryModel.findOne({ slug }).exec();
+    if (!cat) throw new NotFoundException(`Категория не найдена`);
+    const prev = cat.imageUrl;
+    if (prev)
+      try {
+        rmSync(`.${prev}`, { force: true });
+      } catch {
+        /* empty */
+      }
+    cat.imageUrl = this.buildCategoryImageUrl(slug, filename);
+    await cat.save();
+    return { imageUrl: cat.imageUrl };
+  }
+
+  async clearImage(slug: string) {
+    const cat = await this.categoryModel.findOne({ slug }).exec();
+    if (!cat) throw new NotFoundException('Категория не найдена');
+    if (cat.imageUrl)
+      try {
+        rmSync(`.${cat.imageUrl}`, { force: true });
+      } catch {
+        /* empty */
+      }
+    cat.imageUrl = undefined;
+    await cat.save();
+    return { success: true };
+  }
+
+  async incrementViews(slug: string) {
+    const updated = await this.categoryModel
+      .findOneAndUpdate({ slug }, { $inc: { views: 1 } }, { new: true })
+      .lean<Category & { _id: any }>()
+      .exec();
+    if (!updated) throw new NotFoundException('Категория не найдена');
   }
 }

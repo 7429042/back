@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,7 +8,9 @@ import {
   Post,
   Put,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
@@ -22,7 +25,10 @@ import {
   ApiBody,
   ApiBearerAuth,
   ApiQuery,
+  ApiConsumes,
 } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { categoriesMulterOptions } from '../common/config/multer.config';
 
 @ApiTags('Categories')
 @Controller('categories')
@@ -149,5 +155,47 @@ export class CategoriesController {
   @ApiParam({ name: 'slug' })
   getBySlug(@Param('slug') slug: string) {
     return this.categoriesService.findBySlug(slug);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @ApiBearerAuth()
+  @Post(':slug/image')
+  @ApiOperation({ summary: 'Загрузить изображение категории' })
+  @ApiParam({ name: 'slug' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        image: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('image', categoriesMulterOptions))
+  async uploadImage(
+    @Param('slug') slug: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) throw new BadRequestException('Файл не загружен');
+    return this.categoriesService.setImage(slug, file.filename);
+  }
+
+  @UseGuards(JwtAuthGuard, AdminGuard)
+  @ApiBearerAuth()
+  @Delete(':slug/image')
+  @ApiOperation({ summary: 'Удалить изображение категории' })
+  @ApiParam({ name: 'slug' })
+  async deleteImage(@Param('slug') slug: string) {
+    return this.categoriesService.clearImage(slug);
+  }
+
+  @Get(':slug')
+  @ApiOperation({ summary: 'Получить категорию по слагу учитывая просмотр' })
+  @ApiParam({ name: 'slug' })
+  async visit(@Param('slug') slug: string) {
+    return this.categoriesService.incrementViews(slug);
   }
 }

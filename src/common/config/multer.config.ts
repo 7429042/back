@@ -66,3 +66,34 @@ export const multerOptions = {
     },
   }),
 };
+
+export const categoriesMulterOptions = {
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (
+    req: Request,
+    file: Express.Multer.File,
+    cb: (error: Error | null, acceptFile: boolean) => void,
+  ) => {
+    if (file.mimetype.match(/\/(jpg|jpeg|png|gif|webp)$/)) cb(null, true);
+    else
+      cb(
+        new BadRequestException(
+          'Поддерживаются только форматы изображений: jpg, jpeg, png, gif, webp',
+        ),
+        false,
+      );
+  },
+  storage: diskStorage({
+    destination: (req: Request, file, cb) => {
+      const slug = req.params?.slug || 'unknown';
+      const uploadPath = `./uploads/categories/${slug}`;
+      if (!existsSync(uploadPath)) mkdirSync(uploadPath, { recursive: true });
+      cb(null, uploadPath);
+    },
+    filename: (req: Request, file, cb) => {
+      const timestamp = Date.now();
+      const ext = extname(file.originalname);
+      cb(null, `${timestamp}${ext}`);
+    },
+  }),
+};
