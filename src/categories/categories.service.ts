@@ -21,17 +21,17 @@ export interface CategorySearchResult {
   name: string;
   slug: string;
   path: string;
-  depth: number;
+  imageUrl?: string;
   score?: number;
 }
 
-// Lean representation of Category documents returned by Mongoose .lean()
 export type CategoryLean = {
   _id: Types.ObjectId;
   name: string;
   slug: string;
-  parent?: Types.ObjectId;
   path: string;
+  imageUrl?: string;
+  views: number;
 };
 
 @Injectable()
@@ -50,65 +50,24 @@ export class CategoriesService implements OnModuleInit {
       Number.isFinite(readTtl) && readTtl > 0 ? readTtl : 120_000;
   }
 
-  private async resolveParentBySlug(
-    parentSlug: string,
-  ): Promise<
-    | { model: 'ParentCategory'; doc: ParentCategoryDocument }
-    | { model: 'Category'; doc: CategoryDocument }
-    | null
-  > {
-    const normalized = this.normalizeSlug(parentSlug);
-    const pRoot = await this.parentCategoryModel
-      .findOne({ slug: normalized })
-      .exec();
-    if (pRoot) return { model: 'ParentCategory', doc: pRoot };
-    const pCat = await this.categoryModel.findOne({ slug: normalized }).exec();
-    if (pCat) return { model: 'Category', doc: pCat };
-    return null;
-  }
-
   async onModuleInit() {
     try {
-      const root1Name = 'Профессиональное обучение';
-      const root2Name = 'Дополнительное профессиональное образование';
-      const root1Slug = this.normalizeSlug(root1Name);
-      const root2Slug = this.normalizeSlug(root2Name);
+      const roots = [
+        'Профессиональное обучение',
+        'Профессиональная переподготовка',
+        'Повышение квалификации',
+      ];
 
-      // Идемпотентно создать корни в ParentCategory
-      await this.parentCategoryModel.updateOne(
-        { slug: root1Slug },
-        { $setOnInsert: { name: root1Name, slug: root1Slug, depth: 0 } },
-        { upsert: true },
-      );
-      await this.parentCategoryModel.updateOne(
-        { slug: root2Slug },
-        { $setOnInsert: { name: root2Name, slug: root2Slug, depth: 0 } },
-        { upsert: true },
-      );
-      const child1Name = 'Повышение квалификации';
-      const child2Name = 'Профессиональная переподготовка';
-      const pRoot2 = await this.parentCategoryModel
-        .findOne({ slug: root2Slug })
-        .exec();
-      if (pRoot2) {
-        for (const name of [child1Name, child2Name]) {
-          const slug = this.normalizeSlug(name);
-          const exists = await this.categoryModel.exists({ slug });
-          if (!exists) {
-            const path = `${pRoot2.slug}/${slug}`;
-            await this.categoryModel.create({
-              name,
-              slug,
-              parentModel: 'ParentCategory',
-              parent: pRoot2._id,
-              path,
-              depth: Math.max(0, path.split('/').length - 1),
-            });
-          }
-        }
+      for (const name of roots) {
+        const slug = this.normalizeSlug(name);
+        await this.parentCategoryModel.updateOne(
+          { slug },
+          { $setOnInsert: { name, slug } },
+          { upsert: true },
+        );
       }
     } catch (e) {
-      console.warn('Category seeding failed:', e);
+      console.warn('Error initializing categories:', e);
     }
   }
 
@@ -116,13 +75,22 @@ export class CategoriesService implements OnModuleInit {
     string,
     { expires: number; ids: Types.ObjectId[] }
   >();
-  private IDS_TTL_MS: number;
+  private readonly IDS_TTL_MS: number;
 
   private readonly readCache = new Map<
     string,
     { expires: number; value: unknown }
   >();
-  private READ_TTL_MS: number;
+  private readonly READ_TTL_MS: number;
+
+  // Общие проекции
+  private static readonly BASE_PROJECTION = {
+    name: 1,
+    slug: 1,
+    path: 1,
+    imageUrl: 1,
+    views: 1,
+  } as const;
 
   private escapeRegExp(input: string) {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -141,15 +109,15 @@ export class CategoriesService implements OnModuleInit {
     return candidate;
   }
 
-  createCacheKeyForIds(slug: string) {
+  private createCacheKeyForIds(slug: string) {
     return `ids:${this.normalizeSlug(slug)}`;
   }
 
-  clearIdsCache() {
+  private clearIdsCache() {
     this.idsCache.clear();
   }
 
-  clearReadCache() {
+  private clearReadCache() {
     this.readCache.clear();
   }
 
@@ -157,18 +125,36 @@ export class CategoriesService implements OnModuleInit {
     return `/uploads/categories/${slug}/${filename}`;
   }
 
+  private resolveRootParentBySlug(parentSlug: string) {
+    const normalized = this.normalizeSlug(parentSlug);
+    return this.parentCategoryModel.findOne({ slug: normalized }).exec();
+  }
+
+  private isMongoDuplicateKey(err: unknown): err is { code: number } {
+    return (
+      typeof err === 'object' &&
+      err !== null &&
+      'code' in (err as Record<string, unknown>) &&
+      typeof (err as Record<string, unknown>).code === 'number' &&
+      (err as { code: number }).code === 11000
+    );
+  }
+
   async findAll(): Promise<CategoryLean[]> {
     const key = 'read:all';
     const now = Date.now();
     const cached = this.readCache.get(key);
     if (cached && cached.expires > now) return cached.value as CategoryLean[];
-    const res = await this.categoryModel.find().sort({ path: 1 }).lean().exec();
-    const resTyped = (res ?? []) as CategoryLean[];
-    this.readCache.set(key, {
-      expires: now + this.READ_TTL_MS,
-      value: resTyped,
-    });
-    return resTyped;
+
+    const res = await this.categoryModel
+      .find({}, CategoriesService.BASE_PROJECTION)
+      .sort({ path: 1 })
+      .lean()
+      .exec();
+
+    const value = (res ?? []) as CategoryLean[];
+    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value });
+    return value;
   }
 
   async search(q: string, limit: number = 20): Promise<CategorySearchResult[]> {
@@ -189,14 +175,15 @@ export class CategoriesService implements OnModuleInit {
         name: 1,
         slug: 1,
         path: 1,
-        depth: 1,
+        imageUrl: 1,
         score: { $meta: 'textScore' },
-      };
+      } as const;
       const sortCriteria = {
         score: { $meta: 'textScore' },
         path: 1,
       } as const;
-      const docs = (await this.categoryModel
+
+      const docs = await this.categoryModel
         .find(
           { $or: [{ $text: { $search: query } }, { slug: regex }] },
           projection,
@@ -204,20 +191,20 @@ export class CategoriesService implements OnModuleInit {
         .sort(sortCriteria as Record<string, 1 | -1 | { $meta: string }>)
         .limit(safeLimit)
         .lean()
-        .exec()) as CategorySearchResult[];
-      res = docs;
+        .exec();
+      res = docs as CategorySearchResult[];
     } else {
       const regex = new RegExp(this.escapeRegExp(query), 'i');
-      const docs = (await this.categoryModel
+      const docs = await this.categoryModel
         .find(
           { $or: [{ name: regex }, { slug: regex }] },
-          { name: 1, slug: 1, path: 1, depth: 1 },
+          { name: 1, slug: 1, path: 1, imageUrl: 1 },
         )
         .sort({ path: 1 })
         .limit(safeLimit)
         .lean()
-        .exec()) as CategorySearchResult[];
-      res = docs;
+        .exec();
+      res = docs as CategorySearchResult[];
     }
 
     this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: res });
@@ -228,52 +215,38 @@ export class CategoriesService implements OnModuleInit {
     const name = dto.name.trim();
     const providedSlug = dto.slug?.trim();
 
-    let parentModel: 'ParentCategory' | 'Category' | undefined;
-    let parentDoc: ParentCategoryDocument | CategoryDocument | null = null;
-
-    if (dto.parentSlug) {
-      const resolved = await this.resolveParentBySlug(dto.parentSlug);
-      if (!resolved) {
-        throw new BadRequestException(
-          `Parent with slug "${dto.parentSlug}" not found`,
-        );
-      }
-      parentModel = resolved.model;
-      parentDoc = resolved.doc;
+    if (!dto.parentSlug) {
+      throw new BadRequestException(
+        'Parent slug is required: category must belong to one of the three parent categories',
+      );
     }
+
+    const parentRoot = await this.resolveRootParentBySlug(dto.parentSlug);
+    if (!parentRoot) {
+      throw new BadRequestException(
+        `Parent with slug "${dto.parentSlug}" not found`,
+      );
+    }
+
     const rawSlugSource =
       providedSlug && providedSlug.length > 0 ? providedSlug : name;
     const normalized = this.normalizeSlug(rawSlugSource);
     const uniqueSlug = await this.ensureUniqueSlug(normalized);
 
-    const basePath = parentDoc
-      ? parentModel === 'ParentCategory'
-        ? (parentDoc as ParentCategoryDocument).slug
-        : (parentDoc as CategoryDocument).path
-      : '';
-    const path = basePath ? `${basePath}/${uniqueSlug}` : uniqueSlug;
-
-    // Type guard to safely detect Mongo duplicate key errors
-    const hasMongoCode = (err: unknown): err is { code: number } =>
-      typeof err === 'object' &&
-      err !== null &&
-      'code' in err &&
-      typeof (err as Record<string, unknown>).code === 'number';
+    const path = `${parentRoot.slug}/${uniqueSlug}`;
 
     try {
       const created = await this.categoryModel.create({
         name,
         slug: uniqueSlug,
-        parentModel,
-        parent: parentDoc?._id,
+        parentModel: 'ParentCategory',
         path,
-        depth: Math.max(0, path.split('/').length - 1),
       });
       this.clearIdsCache();
       this.clearReadCache();
       return created;
     } catch (e: unknown) {
-      if (hasMongoCode(e) && e.code === 11000) {
+      if (this.isMongoDuplicateKey(e)) {
         throw new BadRequestException(
           `Category with slug "${uniqueSlug}" already exists`,
         );
@@ -283,21 +256,19 @@ export class CategoriesService implements OnModuleInit {
   }
 
   async ensure(dto: CreateCategoryDto) {
-    const providedSlug = dto.slug?.trim() ?? this.normalizeSlug(dto.name);
-    const normalized = this.normalizeSlug(providedSlug);
+    const normalized = this.normalizeSlug(dto.slug?.trim() ?? dto.name);
     const existing = await this.categoryModel
       .findOne({ slug: normalized })
       .lean<CategoryLean>()
       .exec();
     if (existing) return existing;
-    // If not exists, try to create
     return this.create({ ...dto, slug: normalized });
   }
 
   async findBySlug(slug: string) {
     const normalized = this.normalizeSlug(slug);
     const cat = await this.categoryModel
-      .findOne({ slug: normalized })
+      .findOne({ slug: normalized }, CategoriesService.BASE_PROJECTION)
       .lean<CategoryLean>()
       .exec();
     if (!cat) {
@@ -323,90 +294,41 @@ export class CategoriesService implements OnModuleInit {
     }
 
     const updates: Partial<
-      Pick<Category, 'name' | 'slug' | 'path' | 'parent' | 'parentModel'>
+      Pick<Category, 'name' | 'slug' | 'path' | 'parentModel'>
     > = {};
 
     if (typeof data.name === 'string') {
       updates.name = data.name.trim();
     }
-    let newParentDoc: ParentCategoryDocument | CategoryDocument | null = null;
-    let newParentModel: 'ParentCategory' | 'Category' | undefined;
-    let parentChanged = false;
 
-    if (typeof data.parentSlug === 'string') {
-      const resolved = await this.resolveParentBySlug(data.parentSlug);
-      if (!resolved) {
+    let newSlug = current.slug;
+    if (typeof data.slug === 'string' && data.slug.trim().length > 0) {
+      const desiredSlug = this.normalizeSlug(data.slug);
+      if (desiredSlug !== current.slug)
+        newSlug = await this.ensureUniqueSlug(desiredSlug);
+    }
+
+    let basePath: string;
+    if (Object.prototype.hasOwnProperty.call(data, 'parentSlug')) {
+      if (data.parentSlug === null) {
+        throw new BadRequestException('Parent slug is required');
+      }
+      const parentRoot = await this.resolveRootParentBySlug(
+        String(data.parentSlug),
+      );
+      if (!parentRoot) {
         throw new BadRequestException(
           `Parent with slug "${data.parentSlug}" not found`,
         );
       }
-      newParentDoc = resolved.doc;
-      newParentModel = resolved.model;
-
-      if (newParentModel === 'Category') {
-        const parentCat = newParentDoc as CategoryDocument;
-        if (parentCat._id.equals(current._id)) {
-          throw new BadRequestException('Category cannot be its own parent');
-        }
-        const currentPath = current.path;
-        if (
-          parentCat.path === currentPath ||
-          parentCat.path.startsWith(currentPath + '/')
-        ) {
-          throw new BadRequestException(
-            'Cannot assign a descendant as a parent',
-          );
-        }
-      }
-      if (
-        !current.parent ||
-        !current.parentModel ||
-        current.parent.toString() !== newParentDoc._id.toString() ||
-        current.parentModel !== newParentModel
-      ) {
-        parentChanged = true;
-        updates.parent = newParentDoc._id;
-        updates.parentModel = newParentModel;
-      }
-    } else if (data.parentSlug === null) {
-      // Сделать корневой относительно дерева ParentCategory/Category
-      updates.parent = undefined;
-      updates.parentModel = undefined;
-      parentChanged = true;
+      updates.parentModel = 'ParentCategory';
+      basePath = parentRoot.slug;
+    } else {
+      const parts = String(current.path || '').split('/');
+      basePath = parts[0] || '';
     }
 
-    let newSlug = current.slug;
-    if (typeof data.slug === 'string' && data.slug.trim().length > 0) {
-      const desired = this.normalizeSlug(data.slug);
-      if (desired !== current.slug) {
-        newSlug = await this.ensureUniqueSlug(desired);
-      }
-    }
-    let newPath = current.path;
-    if (parentChanged || newSlug !== current.slug) {
-      const basePath = newParentDoc
-        ? newParentModel === 'ParentCategory'
-          ? (newParentDoc as ParentCategoryDocument).slug
-          : (newParentDoc as CategoryDocument).path
-        : current.parent
-          ? await (async () => {
-              if (current.parentModel === 'ParentCategory') {
-                const p = await this.parentCategoryModel
-                  .findById(current.parent)
-                  .lean()
-                  .exec();
-                return p?.slug ?? '';
-              }
-              const p = await this.categoryModel
-                .findById(current.parent)
-                .lean()
-                .exec();
-              return p?.path ?? '';
-            })()
-          : '';
-
-      newPath = basePath ? `${basePath}/${newSlug}` : newSlug;
-    }
+    const newPath = basePath ? `${basePath}/${newSlug}` : newSlug;
     updates.slug = newSlug;
     updates.path = newPath;
 
@@ -421,15 +343,12 @@ export class CategoriesService implements OnModuleInit {
         if (doc._id.equals(current._id)) continue;
         const suffix = doc.path.substring(prevPath.length);
         const updatedPath = `${newPath}${suffix}`;
-        const newDocDepth = Math.max(0, updatedPath.split('/').length - 1);
         await this.categoryModel
-          .updateOne(
-            { _id: doc._id },
-            { path: updatedPath, depth: newDocDepth },
-          )
+          .updateOne({ _id: doc._id }, { path: updatedPath })
           .exec();
       }
     }
+
     this.clearIdsCache();
     this.clearReadCache();
     return this.categoryModel.findById(current._id).lean().exec();
@@ -438,17 +357,19 @@ export class CategoriesService implements OnModuleInit {
   async deleteBySlug(slug: string) {
     const normalized = this.normalizeSlug(slug);
     const current = await this.categoryModel
-      .findOne({ slug: normalized })
-      .lean<CategoryLean>()
+      .findOne({ slug: normalized }, { _id: 1, path: 1 })
+      .lean<{ _id: Types.ObjectId; path: string }>()
       .exec();
     if (!current) {
       throw new NotFoundException(
         `Category with slug "${normalized}" not found`,
       );
     }
+
     const safePath = this.escapeRegExp(current.path);
     const regex = new RegExp(`^${safePath}(\\/|$)`);
     await this.categoryModel.deleteMany({ path: regex }).exec();
+
     this.clearIdsCache();
     this.clearReadCache();
     return { deleted: true };
@@ -471,6 +392,7 @@ export class CategoriesService implements OnModuleInit {
     if (!cat) {
       throw new NotFoundException(`Category with slug "${slug}" not found`);
     }
+
     const safePath = this.escapeRegExp(cat.path);
     const regex = new RegExp(`^${safePath}(\\/|$)`);
     const all = (await this.categoryModel
@@ -485,14 +407,17 @@ export class CategoriesService implements OnModuleInit {
 
   async setImage(slug: string, filename: string) {
     const cat = await this.categoryModel.findOne({ slug }).exec();
-    if (!cat) throw new NotFoundException(`Категория не найдена`);
+    if (!cat) throw new NotFoundException('Категория не найдена');
+
     const prev = cat.imageUrl;
-    if (prev)
+    if (prev) {
       try {
         rmSync(`.${prev}`, { force: true });
       } catch {
-        /* empty */
+        /* noop */
       }
+    }
+
     cat.imageUrl = this.buildCategoryImageUrl(slug, filename);
     await cat.save();
     return { imageUrl: cat.imageUrl };
@@ -501,12 +426,15 @@ export class CategoriesService implements OnModuleInit {
   async clearImage(slug: string) {
     const cat = await this.categoryModel.findOne({ slug }).exec();
     if (!cat) throw new NotFoundException('Категория не найдена');
-    if (cat.imageUrl)
+
+    if (cat.imageUrl) {
       try {
         rmSync(`.${cat.imageUrl}`, { force: true });
       } catch {
-        /* empty */
+        /* noop */
       }
+    }
+
     cat.imageUrl = undefined;
     await cat.save();
     return { success: true };
@@ -514,9 +442,14 @@ export class CategoriesService implements OnModuleInit {
 
   async incrementViews(slug: string) {
     const updated = await this.categoryModel
-      .findOneAndUpdate({ slug }, { $inc: { views: 1 } }, { new: true })
-      .lean<Category & { _id: any }>()
+      .findOneAndUpdate(
+        { slug },
+        { $inc: { views: 1 } },
+        { new: true, projection: CategoriesService.BASE_PROJECTION },
+      )
+      .lean<CategoryLean>()
       .exec();
     if (!updated) throw new NotFoundException('Категория не найдена');
+    return updated;
   }
 }

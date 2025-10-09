@@ -37,13 +37,13 @@ export class CategoriesController {
   constructor(private readonly categoriesService: CategoriesService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Список категорий (плоский)' })
+  @ApiOperation({ summary: 'Список категорий (плоский список дочерних)' })
   findAll() {
     return this.categoriesService.findAll();
   }
 
   @Get('search')
-  @ApiOperation({ summary: 'Поиск категорий' })
+  @ApiOperation({ summary: 'Поиск категорий по name/slug' })
   @ApiQuery({
     name: 'q',
     required: true,
@@ -62,17 +62,29 @@ export class CategoriesController {
   @UseGuards(JwtAuthGuard, AdminGuard)
   @ApiBearerAuth()
   @Post()
-  @ApiOperation({ summary: 'Создать категорию' })
+  @ApiOperation({
+    summary: 'Создать дочернюю категорию (parentSlug обязателен)',
+  })
   @ApiBody({
     type: CreateCategoryDto,
     examples: {
-      root: {
-        description: 'Корневая категория',
-        value: { name: 'Programming', slug: 'programming' },
+      childPO: {
+        description: 'Дочерняя под «Профессиональное обучение»',
+        value: { name: 'Сварщик', parentSlug: 'professionalnoe-obuchenie' },
       },
-      child: {
-        description: 'Дочерняя категория',
-        value: { name: 'JavaScript', parentSlug: 'programming' },
+      childPP: {
+        description: 'Дочерняя под «Профессиональная переподготовка»',
+        value: {
+          name: 'Бухгалтер',
+          parentSlug: 'professionalnaya-perepodgotovka',
+        },
+      },
+      childPK: {
+        description: 'Дочерняя под «Повышение квалификации»',
+        value: {
+          name: '1С для бухгалтеров',
+          parentSlug: 'povyshenie-kvalifikacii',
+        },
       },
     },
   })
@@ -80,21 +92,19 @@ export class CategoriesController {
     return this.categoriesService.create(dto);
   }
 
-  // Ensure base categories exist (idempotent)
   @UseGuards(JwtAuthGuard, AdminGuard)
   @ApiBearerAuth()
   @Post('ensure')
-  @ApiOperation({ summary: 'Идемпотентно создать категорию (если нет)' })
+  @ApiOperation({
+    summary: 'Идемпотентно создать дочернюю категорию (если нет)',
+  })
   @ApiBody({
     type: CreateCategoryDto,
     examples: {
-      root: {
-        description: 'Создать, если не существует (корень)',
-        value: { name: 'Design', slug: 'design' },
-      },
-      child: {
-        description: 'Создать, если не существует (дочерняя)',
-        value: { name: 'UX', parentSlug: 'design' },
+      childPO: {
+        description:
+          'Создать, если не существует (под «Профессиональное обучение»)',
+        value: { name: 'Плотник', parentSlug: 'professionalnoe-obuchenie' },
       },
     },
   })
@@ -113,8 +123,8 @@ export class CategoriesController {
       rename: { description: 'Переименовать', value: { name: 'Frontend' } },
       reslug: { description: 'Изменить slug', value: { slug: 'frontend' } },
       reparent: {
-        description: 'Переместить под другого родителя',
-        value: { parentSlug: 'programming' },
+        description: 'Переместить под одного из 3 фиксированных родителей',
+        value: { parentSlug: 'povyshenie-kvalifikacii' },
       },
     },
   })
@@ -181,7 +191,9 @@ export class CategoriesController {
   }
 
   @Patch(':slug/views')
-  @ApiOperation({ summary: 'Получить категорию по слагу учитывая просмотр' })
+  @ApiOperation({
+    summary: 'Увеличить просмотры и вернуть обновлённую категорию',
+  })
   @ApiParam({ name: 'slug' })
   async visit(@Param('slug') slug: string) {
     return this.categoriesService.incrementViews(slug);
