@@ -59,6 +59,12 @@ export class CategoriesController {
     return this.categoriesService.search(query.q, query.limit);
   }
 
+  @Get('parent-counters')
+  @ApiOperation({ summary: 'Счётчики дочерних категорий по 3 родителям' })
+  getParentCounters() {
+    return this.categoriesService.getParentsCounters();
+  }
+
   @UseGuards(JwtAuthGuard, AdminGuard)
   @ApiBearerAuth()
   @Post()

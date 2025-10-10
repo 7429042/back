@@ -14,6 +14,8 @@ import { AuthModule } from './auth/auth.module';
 import { CartModule } from './cart/cart.module';
 import * as Joi from 'joi';
 import { join } from 'path';
+import { RedisModule } from './redis/redis.module';
+import { DebugController } from './debug/debug.controller';
 
 @Module({
   imports: [
@@ -59,6 +61,7 @@ import { join } from 'path';
       rootPath: join(process.cwd(), 'uploads'),
       serveRoot: '/uploads',
     }),
+    RedisModule,
     HealthModule,
     CategoriesModule,
     ProgramsModule,
@@ -67,7 +70,7 @@ import { join } from 'path';
     AuthModule,
     CartModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, DebugController],
   providers: [AppService, MongoConnectionLogger],
 })
 export class AppModule {}

@@ -1,10 +1,14 @@
 import { Controller, Get } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
+import { SimpleRedisService } from '../redis/redis.service';
 
 @Controller('health')
 export class HealthController {
-  constructor(@InjectConnection() private readonly connection: Connection) {}
+  constructor(
+    @InjectConnection() private readonly connection: Connection,
+    private readonly cache: SimpleRedisService,
+  ) {}
 
   @Get()
   getHealth() {
@@ -22,5 +26,11 @@ export class HealthController {
         status: mongo.get(state) ?? 'unknown',
       },
     };
+  }
+
+  @Get('redis')
+  async redisHealth() {
+    const pong = await this.cache.ping();
+    return { redis: pong };
   }
 }

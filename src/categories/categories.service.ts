@@ -16,6 +16,7 @@ import { CreateCategoryDto } from './dto/create-category.dto';
 import slugify from '@sindresorhus/slugify';
 import { ConfigService } from '@nestjs/config';
 import { rmSync } from 'node:fs';
+import { SimpleRedisService } from '../redis/redis.service';
 
 export interface CategorySearchResult {
   name: string;
@@ -42,48 +43,24 @@ export class CategoriesService implements OnModuleInit {
     @InjectModel(ParentCategory.name)
     private readonly parentCategoryModel: Model<ParentCategoryDocument>,
     private readonly config: ConfigService,
+    private readonly cache: SimpleRedisService,
   ) {
-    const ttl = Number(this.config.get('CATEGORIES_IDS_TTL_MS'));
-    this.IDS_TTL_MS = Number.isFinite(ttl) && ttl > 0 ? ttl : 60_000;
-    const readTtl = Number(this.config.get('CATEGORIES_CACHE_TTL_MS'));
+    const ttlIdsMs = Number(this.config.get('CATEGORIES_IDS_TTL_MS'));
+    const ttlReadMs = Number(this.config.get('CATEGORIES_CACHE_TTL_MS'));
+    this.IDS_TTL_MS =
+      Number.isFinite(ttlIdsMs) && ttlIdsMs > 0 ? ttlIdsMs : 60_000;
     this.READ_TTL_MS =
-      Number.isFinite(readTtl) && readTtl > 0 ? readTtl : 120_000;
+      Number.isFinite(ttlReadMs) && ttlReadMs > 0 ? ttlReadMs : 120_000;
+
+    this.IDS_TTL_S = Math.max(1, Math.floor(this.IDS_TTL_MS / 1000));
+    this.READ_TTL_S = Math.max(1, Math.floor(this.READ_TTL_MS / 1000));
   }
 
-  async onModuleInit() {
-    try {
-      const roots = [
-        'Профессиональное обучение',
-        'Профессиональная переподготовка',
-        'Повышение квалификации',
-      ];
-
-      for (const name of roots) {
-        const slug = this.normalizeSlug(name);
-        await this.parentCategoryModel.updateOne(
-          { slug },
-          { $setOnInsert: { name, slug } },
-          { upsert: true },
-        );
-      }
-    } catch (e) {
-      console.warn('Error initializing categories:', e);
-    }
-  }
-
-  private readonly idsCache = new Map<
-    string,
-    { expires: number; ids: Types.ObjectId[] }
-  >();
   private readonly IDS_TTL_MS: number;
-
-  private readonly readCache = new Map<
-    string,
-    { expires: number; value: unknown }
-  >();
   private readonly READ_TTL_MS: number;
+  private readonly IDS_TTL_S: number;
+  private readonly READ_TTL_S: number;
 
-  // Общие проекции
   private static readonly BASE_PROJECTION = {
     name: 1,
     slug: 1,
@@ -109,18 +86,6 @@ export class CategoriesService implements OnModuleInit {
     return candidate;
   }
 
-  private createCacheKeyForIds(slug: string) {
-    return `ids:${this.normalizeSlug(slug)}`;
-  }
-
-  private clearIdsCache() {
-    this.idsCache.clear();
-  }
-
-  private clearReadCache() {
-    this.readCache.clear();
-  }
-
   private buildCategoryImageUrl(slug: string, filename: string) {
     return `/uploads/categories/${slug}/${filename}`;
   }
@@ -140,20 +105,69 @@ export class CategoriesService implements OnModuleInit {
     );
   }
 
-  async findAll(): Promise<CategoryLean[]> {
-    const key = 'read:all';
-    const now = Date.now();
-    const cached = this.readCache.get(key);
-    if (cached && cached.expires > now) return cached.value as CategoryLean[];
+  private cacheKeyAll() {
+    return 'categories:all';
+  }
 
-    const res = await this.categoryModel
+  private cacheKeySearch(query: string, limit: number) {
+    return `categories:search:${query.toLowerCase()}:${limit}`;
+  }
+
+  private cacheKeyIds(slug: string) {
+    const normalized = this.normalizeSlug(slug);
+    return `categories:ids:${normalized}`;
+  }
+
+  private async invalidateReadCache() {
+    await this.cache.safeDel(this.cacheKeyAll());
+  }
+
+  private async invalidateIdsCache(slug: string) {
+    await this.cache.safeDel(this.cacheKeyIds(slug));
+  }
+
+  private cacheKeyParentCounters() {
+    return 'categories:parent-counters';
+  }
+
+  private async invalidateParentCountersCache() {
+    await this.cache.safeDel(this.cacheKeyParentCounters());
+  }
+
+  async onModuleInit() {
+    try {
+      const roots = [
+        'Профессиональное обучение',
+        'Профессиональная переподготовка',
+        'Повышение квалификации',
+      ];
+
+      for (const name of roots) {
+        const slug = this.normalizeSlug(name);
+        await this.parentCategoryModel.updateOne(
+          { slug },
+          { $setOnInsert: { name, slug } },
+          { upsert: true },
+        );
+      }
+    } catch (e) {
+      console.warn('Error initializing categories:', e);
+    }
+  }
+
+  async findAll(): Promise<CategoryLean[]> {
+    const key = this.cacheKeyAll();
+    const cached = await this.cache.safeGet<CategoryLean[]>(key);
+    if (cached) return cached;
+
+    const docs = await this.categoryModel
       .find({}, CategoriesService.BASE_PROJECTION)
       .sort({ path: 1 })
       .lean()
       .exec();
 
-    const value = (res ?? []) as CategoryLean[];
-    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value });
+    const value = (docs ?? []) as CategoryLean[];
+    await this.cache.safeSet(key, value, this.READ_TTL_S);
     return value;
   }
 
@@ -162,11 +176,9 @@ export class CategoriesService implements OnModuleInit {
     if (!query) return [];
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
 
-    const key = `read:search:${query.toLowerCase()}:${safeLimit}`;
-    const now = Date.now();
-    const cached = this.readCache.get(key);
-    if (cached && cached.expires > now)
-      return cached.value as CategorySearchResult[];
+    const key = this.cacheKeySearch(query, safeLimit);
+    const cached = await this.cache.safeGet<CategorySearchResult[]>(key);
+    if (cached) return cached;
 
     let res: CategorySearchResult[] = [];
     if (query.length >= 2) {
@@ -206,8 +218,7 @@ export class CategoriesService implements OnModuleInit {
         .exec();
       res = docs as CategorySearchResult[];
     }
-
-    this.readCache.set(key, { expires: now + this.READ_TTL_MS, value: res });
+    await this.cache.safeSet(key, res, this.READ_TTL_S);
     return res;
   }
 
@@ -242,8 +253,8 @@ export class CategoriesService implements OnModuleInit {
         parentModel: 'ParentCategory',
         path,
       });
-      this.clearIdsCache();
-      this.clearReadCache();
+      await this.invalidateReadCache();
+      await this.invalidateParentCountersCache();
       return created;
     } catch (e: unknown) {
       if (this.isMongoDuplicateKey(e)) {
@@ -349,8 +360,10 @@ export class CategoriesService implements OnModuleInit {
       }
     }
 
-    this.clearIdsCache();
-    this.clearReadCache();
+    await this.invalidateReadCache();
+    await this.invalidateIdsCache(slug);
+    await this.invalidateIdsCache(newSlug);
+    await this.invalidateParentCountersCache();
     return this.categoryModel.findById(current._id).lean().exec();
   }
 
@@ -370,22 +383,18 @@ export class CategoriesService implements OnModuleInit {
     const regex = new RegExp(`^${safePath}(\\/|$)`);
     await this.categoryModel.deleteMany({ path: regex }).exec();
 
-    this.clearIdsCache();
-    this.clearReadCache();
+    await this.invalidateReadCache();
+    await this.invalidateIdsCache(slug);
+    await this.invalidateParentCountersCache();
     return { deleted: true };
   }
 
   async collectCategoryAndDescendantsIdsBySlug(
     slug: string,
   ): Promise<Types.ObjectId[]> {
-    const key = this.createCacheKeyForIds(slug);
-    const now = Date.now();
-    const cached = this.idsCache.get(key);
-    if (cached && cached.expires > now) {
-      return cached.ids;
-    } else if (cached) {
-      this.idsCache.delete(key);
-    }
+    const key = this.cacheKeyIds(slug);
+    const cached = await this.cache.safeGet<string[]>(key);
+    if (cached) return cached.map((id) => new Types.ObjectId(id));
 
     const normalized = this.normalizeSlug(slug);
     const cat = await this.categoryModel.findOne({ slug: normalized }).exec();
@@ -401,7 +410,11 @@ export class CategoriesService implements OnModuleInit {
       .exec()) as { _id: Types.ObjectId }[];
     const ids = (all ?? []).map((item) => new Types.ObjectId(item._id));
 
-    this.idsCache.set(key, { expires: now + this.IDS_TTL_MS, ids });
+    await this.cache.safeSet(
+      key,
+      ids.map((x) => String(x)),
+      this.IDS_TTL_S,
+    );
     return ids;
   }
 
@@ -420,6 +433,8 @@ export class CategoriesService implements OnModuleInit {
 
     cat.imageUrl = this.buildCategoryImageUrl(slug, filename);
     await cat.save();
+    await this.invalidateReadCache();
+    await this.invalidateParentCountersCache();
     return { imageUrl: cat.imageUrl };
   }
 
@@ -437,6 +452,8 @@ export class CategoriesService implements OnModuleInit {
 
     cat.imageUrl = undefined;
     await cat.save();
+    await this.invalidateReadCache();
+    await this.invalidateParentCountersCache();
     return { success: true };
   }
 
@@ -451,5 +468,47 @@ export class CategoriesService implements OnModuleInit {
       .exec();
     if (!updated) throw new NotFoundException('Категория не найдена');
     return updated;
+  }
+
+  async getParentsCounters(): Promise<
+    { slug: string; name: string; count: number }[]
+  > {
+    const key = this.cacheKeyParentCounters();
+    const cached =
+      await this.cache.safeGet<{ slug: string; name: string; count: number }[]>(
+        key,
+      );
+    if (cached) return cached;
+
+    const parents = await this.parentCategoryModel
+      .find({}, { slug: 1, name: 1 })
+      .lean()
+      .exec();
+
+    const buckets = await this.categoryModel.aggregate<{
+      _id: string;
+      count: number;
+    }>([
+      { $project: { toot: { $arrayElemAt: [{ $split: ['$path', '/'] }, 0] } } },
+      { $group: { _id: '$toot', count: { $sum: 1 } } },
+    ]);
+
+    const counts = new Map(buckets.map((x) => [x._id, x.count]));
+    const order = [
+      'professionalnoe-obuchenie',
+      'professionalnaya-perepodgotovka',
+      'povyshenie-kvalifikacii',
+    ];
+
+    const nameBySlug = new Map(parents.map((x) => [x.slug, x.name]));
+
+    const result = order.map((slug) => ({
+      slug,
+      name: nameBySlug.get(slug) ?? slug,
+      count: counts.get(slug) ?? 0,
+    }));
+
+    await this.cache.safeSet(key, result, this.IDS_TTL_S);
+    return result;
   }
 }
