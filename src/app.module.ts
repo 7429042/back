@@ -23,7 +23,7 @@ import { DebugController } from './debug/debug.controller';
       envFilePath: ['.env'],
       isGlobal: true,
       validationSchema: Joi.object({
-        PORT: Joi.number().default(3000),
+        PORT: Joi.number().default(4200),
         MONGODB_URI: Joi.string().required(),
         JWT_SECRET: Joi.string().min(16).required(),
         JWT_EXPIRES_IN: Joi.string().required(),
@@ -49,7 +49,11 @@ import { DebugController } from './debug/debug.controller';
           .integer()
           .min(1000)
           .default(120000),
+        RATE_LIMIT_TTL_SEC: Joi.number().integer().min(1).max(3600).default(60),
+        RATE_LIMIT_MAX: Joi.number().integer().min(1).max(1000).default(10),
+        CSRF_HMAC_SECRET: Joi.string().min(16).required(),
       }),
+
     }),
     MongooseModule.forRootAsync({
       inject: [ConfigService],

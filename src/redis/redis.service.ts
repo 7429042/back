@@ -10,10 +10,7 @@ export class SimpleRedisService {
   private readonly jsonReviver?: JsonReviver;
   private readonly jsonReplacer?: JsonReplacer;
 
-  constructor(
-    @Inject('REDIS') private readonly redis: Redis,
-
-  ) {
+  constructor(@Inject('REDIS') private readonly redis: Redis) {
     this.redis.on('connect', () => {
       this.logger.log('Redis connected');
     });
@@ -111,5 +108,11 @@ export class SimpleRedisService {
     const fresh = await producer();
     await this.safeSet(key, fresh, ttlSeconds);
     return fresh;
+  }
+  async incr(key: string): Promise<number> {
+    return this.redis.incr(key);
+  }
+  async expire(key: string, ttlSeconds: number): Promise<number> {
+    return this.redis.expire(key, ttlSeconds);
   }
 }

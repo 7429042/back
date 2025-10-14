@@ -31,6 +31,7 @@ async function bootstrap() {
       'X-Requested-With',
       'Accept',
       'x-skip-error-log',
+      'X-CSRF-Token',
     ],
     exposedHeaders: ['Authorization'],
   });

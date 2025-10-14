@@ -11,6 +11,8 @@ import {
   RefreshSession,
   RefreshSessionSchema,
 } from './schemas/refresh-session.schema';
+import { RedisModule } from '../redis/redis.module';
+import { RateLimitGuard } from './guards/rate-limit.guard';
 
 @Module({
   imports: [
@@ -34,9 +36,10 @@ import {
     MongooseModule.forFeature([
       { name: RefreshSession.name, schema: RefreshSessionSchema },
     ]),
+    RedisModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, JwtStrategy, RateLimitGuard],
   exports: [PassportModule, AuthService],
 })
 export class AuthModule {}

@@ -16,6 +16,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { UserId } from './decorators/user-id.decorator';
+import { RateLimitGuard } from './guards/rate-limit.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -26,6 +27,7 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Post('login')
+  @UseGuards(RateLimitGuard)
   async login(
     @Body() dto: LoginUserDto,
     @Req() req: Request,
@@ -41,6 +43,7 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Post('refresh')
+  @UseGuards(RateLimitGuard)
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
@@ -57,6 +60,7 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Post('logout')
+  @UseGuards(RateLimitGuard)
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const refreshTokenFromCookie = (req.cookies?.['refresh_token'] ??
       undefined) as string;
