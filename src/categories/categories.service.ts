@@ -462,11 +462,16 @@ export class CategoriesService implements OnModuleInit {
       .findOneAndUpdate(
         { slug },
         { $inc: { views: 1 } },
-        { new: true, projection: CategoriesService.BASE_PROJECTION },
+        {
+          new: true,
+          projection: (this.constructor as typeof CategoriesService)
+            .BASE_PROJECTION,
+        },
       )
       .lean<CategoryLean>()
       .exec();
     if (!updated) throw new NotFoundException('Категория не найдена');
+    await this.cache.safeDel('categories:all');
     return updated;
   }
 
@@ -489,8 +494,8 @@ export class CategoriesService implements OnModuleInit {
       _id: string;
       count: number;
     }>([
-      { $project: { toot: { $arrayElemAt: [{ $split: ['$path', '/'] }, 0] } } },
-      { $group: { _id: '$toot', count: { $sum: 1 } } },
+      { $project: { root: { $arrayElemAt: [{ $split: ['$path', '/'] }, 0] } } },
+      { $group: { _id: '$root', count: { $sum: 1 } } },
     ]);
 
     const counts = new Map(buckets.map((x) => [x._id, x.count]));
@@ -508,7 +513,7 @@ export class CategoriesService implements OnModuleInit {
       count: counts.get(slug) ?? 0,
     }));
 
-    await this.cache.safeSet(key, result, this.IDS_TTL_S);
+    await this.cache.safeSet(key, result, this.READ_TTL_S);
     return result;
   }
 }

@@ -1,4 +1,8 @@
-import { HydratedDocument, Types } from 'mongoose';
+import {
+  CallbackWithoutResultAndOptionalError,
+  HydratedDocument,
+  Types,
+} from 'mongoose';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 
 export type ProgramDocument = HydratedDocument<Program>;
@@ -10,17 +14,11 @@ export class Program {
   @Prop({ required: false, trim: true })
   title?: string;
 
-  @Prop({ required: false, enum: ['dpo', 'prof_training'], index: true })
-  categoryType?: 'dpo' | 'prof_training';
-
-  @Prop({ required: false, enum: ['pk', 'pp'], index: true })
-  dpoSubcategory?: 'pk' | 'pp';
-
   @Prop({ required: false, trim: true })
   description?: string;
 
-  @Prop({ type: Types.ObjectId, ref: 'Category', required: false, index: true })
-  category?: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Category', required: true, index: true })
+  category: Types.ObjectId;
 
   @Prop({ required: true, default: 0, min: 0 })
   views: number;
@@ -50,32 +48,56 @@ export class Program {
 
   @Prop({ required: false, index: true })
   lowercaseTitle?: string;
+
+  @Prop({ required: false, min: 0 })
+  price?: number;
 }
 
 export const ProgramSchema = SchemaFactory.createForClass(Program);
 
-ProgramSchema.pre('save', function (next) {
-  const doc = this as unknown as Program;
-  if (doc.categoryType === 'dpo') {
-    if (doc.dpoSubcategory === 'pk') {
-      doc.completionDocument = 'Удостоверение о повышении квалификации';
-    } else if (doc.dpoSubcategory === 'pp') {
-      doc.completionDocument = 'Диплом о профессиональной переподготовке';
-    } else {
-      doc.completionDocument = undefined;
+ProgramSchema.pre(
+  'save',
+  async function (
+    this: HydratedDocument<Program>,
+    next: CallbackWithoutResultAndOptionalError,
+  ) {
+    try {
+      const titleTrim = this.title?.trim();
+      this.lowercaseTitle =
+        titleTrim && titleTrim.length > 0 ? titleTrim.toLowerCase() : undefined;
+
+      if (!this.category) return next(new Error('Category is required'));
+
+      const CategoryModel = this.model('Category');
+      const cat = await CategoryModel.findById(this.category, { path: 1 })
+        .lean<{ path: string }>()
+        .exec();
+
+      if (!cat || typeof cat.path !== 'string')
+        return next(new Error('Category not found'));
+
+      const rootSlug: string = String(cat.path).split('/')[0] || '';
+      switch (rootSlug) {
+        case 'professionalnoe-obuchenie':
+          this.completionDocument =
+            'Свидетельство о профессии рабочего / должности служащего';
+          break;
+        case 'professionalnaya-perepodgotovka':
+          this.completionDocument = 'Диплом о профессиональной переподготовке';
+          break;
+        case 'povyshenie-kvalifikacii':
+          this.completionDocument = 'Удостоверение о повышении квалификации';
+          break;
+        default:
+          this.completionDocument = undefined;
+          break;
+      }
+      next();
+    } catch (error) {
+      next(error as Error);
     }
-  } else if (doc.categoryType === 'prof_training') {
-    doc.completionDocument =
-      'Свидетельство о профессии рабочего / должности служащего';
-  } else {
-    doc.completionDocument = undefined;
-  }
-  doc.lowercaseTitle =
-    typeof doc.title === 'string' && doc.title.trim().length > 0
-      ? doc.title.trim().toLowerCase()
-      : undefined;
-  next();
-});
+  },
+);
 
 ProgramSchema.index(
   { title: 'text', description: 'text' },
@@ -93,7 +115,7 @@ ProgramSchema.index(
 ProgramSchema.index(
   {
     status: 1,
-    catogory: 1,
+    category: 1,
     lowercaseTitle: 1,
     views: -1,
     createdAt: -1,

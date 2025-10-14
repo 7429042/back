@@ -9,23 +9,68 @@ import { Program, ProgramDocument } from './schemas/programSchema';
 import slugify from '@sindresorhus/slugify';
 import { ProgramResponseDto } from './dto/program-response.dto';
 import { AnyProgram, mapProgram, mapPrograms } from './mappers/program.mapper';
+import { ConfigService } from '@nestjs/config';
+import { SimpleRedisService } from '../redis/redis.service';
 
 @Injectable()
 export class ProgramsService {
   constructor(
     @InjectModel(Program.name)
     private readonly programModel: Model<ProgramDocument>,
-  ) {}
+    private readonly config: ConfigService,
+    private readonly cache: SimpleRedisService,
+  ) {
+    const readMs = Number(this.config.get('PROGRAMS_CACHE_TTL_MS'));
+    const suggestMs = Number(this.config.get('PROGRAMS_SUGGEST_TTL_MS'));
+    this.READ_TTL_MS = Number.isFinite(readMs) && readMs > 0 ? readMs : 120_000;
+    this.SUGGEST_TTL_MS =
+      Number.isFinite(suggestMs) && suggestMs > 0 ? suggestMs : 60_000;
+    this.READ_TTL_S = Math.max(1, Math.floor(this.READ_TTL_MS / 1000));
+    this.SUGGEST_TTL_S = Math.max(1, Math.floor(this.SUGGEST_TTL_MS / 1000));
+  }
 
-  // Простой кэш для suggest (ключ -> данные с TTL)
-  private readonly suggestCache = new Map<
-    string,
-    { expires: number; data: ProgramResponseDto[] }
-  >();
-  private readonly SUGGEST_TTL_MS = 60_000;
+  private readonly READ_TTL_MS: number;
+  private readonly SUGGEST_TTL_MS: number;
+  private readonly READ_TTL_S: number;
+  private readonly SUGGEST_TTL_S: number;
 
-  private clearSuggestCache() {
-    this.suggestCache.clear();
+  private cacheKeySuggest(params: {
+    q: string;
+    limit: number;
+    status: 'draft' | 'published';
+    cats: string[];
+  }) {
+    return `programs:suggest:${params.status}:${params.limit}:${params.q}:${params.cats.join(',')}`;
+  }
+
+  private cacheKeyList(params: {
+    status?: 'draft' | 'published';
+    limit?: number;
+    offset?: number;
+    categoryIds?: string[];
+    sort?: 'createdAt' | 'views' | 'hours';
+    order?: 'asc' | 'desc';
+    text?: string;
+  }) {
+    const parts = [
+      `st:${params.status ?? ''}`,
+      `l:${params.limit ?? ''}`,
+      `o:${params.offset ?? ''}`,
+      `c:${(params.categoryIds ?? []).join(',')}`,
+      `s:${params.sort ?? ''}`,
+      `d:${params.order ?? ''}`,
+      `t:${(params.text ?? '').trim().toLowerCase()}`,
+    ];
+    return `programs:list:${parts.join('|')}`;
+  }
+
+  private async invalidateListsCache() {
+    // Упрощённо: минимальный сброс; при желании позже добавим delByPattern
+    await this.cache.safeDel('programs:all');
+  }
+
+  private async invalidateSuggestCache() {
+    // Пока не чистим, полагаемся на TTL. Позже можно добавить очистку по шаблону
   }
 
   private normalizeSlug(input: string) {
@@ -51,8 +96,14 @@ export class ProgramsService {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  async createDraft(): Promise<{ id: string }> {
-    const doc = await this.programModel.create({ status: 'draft' });
+  async createDraft(categoryId: Types.ObjectId): Promise<{ id: string }> {
+    if (!Types.ObjectId.isValid(categoryId)) {
+      throw new BadRequestException('Invalid category ID');
+    }
+    const doc = await this.programModel.create({
+      status: 'draft',
+      category: categoryId,
+    });
     return { id: doc._id.toString() };
   }
 
@@ -65,6 +116,18 @@ export class ProgramsService {
     order?: 'asc' | 'desc';
     text?: string;
   }): Promise<ProgramResponseDto[]> {
+    const key = this.cacheKeyList({
+      status: params.status,
+      limit: params.limit,
+      offset: params.offset,
+      categoryIds: (params.categoryIds ?? []).map(String),
+      sort: params.sort,
+      order: params.order,
+      text: params.text,
+    });
+    const cached = await this.cache.safeGet<ProgramResponseDto[]>(key);
+    if (cached) return cached;
+
     const filter: FilterQuery<Program> = {};
     if (params.status) filter.status = params.status;
     if (params.categoryIds && params.categoryIds.length > 0) {
@@ -111,7 +174,9 @@ export class ProgramsService {
     if (params.offset) query.skip(params.offset);
 
     const rows = await query.lean<AnyProgram[]>().exec();
-    return mapPrograms(rows);
+    const result = mapPrograms(rows);
+    await this.cache.safeSet(key, result, this.READ_TTL_S);
+    return result;
   }
 
   async findAllWithMeta(params: {
@@ -128,6 +193,23 @@ export class ProgramsService {
     limit: number;
     offset: number;
   }> {
+    const key = this.cacheKeyList({
+      status: params.status,
+      limit: params.limit,
+      offset: params.offset,
+      categoryIds: (params.categoryIds ?? []).map(String),
+      sort: params.sort,
+      order: params.order,
+      text: params.text,
+    });
+    const cached = await this.cache.safeGet<{
+      items: ProgramResponseDto[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(key);
+    if (cached) return cached;
+
     const filter: FilterQuery<Program> = {};
     if (params.status) filter.status = params.status;
     if (params.categoryIds && params.categoryIds.length > 0)
@@ -175,12 +257,9 @@ export class ProgramsService {
       this.programModel.countDocuments(filter).exec(),
     ]);
 
-    return {
-      items: mapPrograms(itemsRaw),
-      total,
-      limit,
-      offset,
-    };
+    const result = { items: mapPrograms(itemsRaw), total, limit, offset };
+    await this.cache.safeSet(key, result, this.READ_TTL_S);
+    return result;
   }
 
   async findOneById(
@@ -216,6 +295,8 @@ export class ProgramsService {
         .lean<AnyProgram>()
         .exec();
 
+      await this.invalidateListsCache();
+
       return mapProgram(updated ?? current);
     }
     return mapProgram(current);
@@ -246,6 +327,7 @@ export class ProgramsService {
         .lean<AnyProgram>()
         .exec();
 
+      await this.invalidateListsCache();
       return mapProgram(updated ?? current);
     }
     return mapProgram(current);
@@ -292,12 +374,6 @@ export class ProgramsService {
     if (typeof doc.hours !== 'number' || doc.hours <= 0) {
       errors.push('Hours must be a positive number');
     }
-    if (!doc.categoryType) {
-      errors.push('Category type is required');
-    }
-    if (doc.categoryType === 'dpo' && !doc.dpoSubcategory) {
-      errors.push('DPO subcategory is required');
-    }
 
     if (errors.length > 0) {
       throw new BadRequestException(
@@ -312,8 +388,8 @@ export class ProgramsService {
     doc.status = 'published';
     await doc.save();
 
-    // Инвалидация кэша подсказок
-    this.clearSuggestCache();
+    await this.invalidateListsCache();
+    await this.invalidateSuggestCache();
 
     // Возвращаем lean-версию
     const view = await this.programModel
@@ -329,15 +405,7 @@ export class ProgramsService {
   async updateDraft(
     id: string,
     updates: Partial<
-      Pick<
-        Program,
-        | 'title'
-        | 'description'
-        | 'hours'
-        | 'categoryType'
-        | 'dpoSubcategory'
-        | 'category'
-      >
+      Pick<Program, 'title' | 'description' | 'hours' | 'category' | 'price'>
     >,
   ): Promise<ProgramResponseDto> {
     if (!Types.ObjectId.isValid(id)) {
@@ -367,18 +435,13 @@ export class ProgramsService {
     if (typeof updates.hours !== 'undefined') {
       doc.hours = updates.hours;
     }
-    if (typeof updates.categoryType !== 'undefined') {
-      doc.categoryType = updates.categoryType;
-    }
-    if (typeof updates.dpoSubcategory !== 'undefined') {
-      doc.dpoSubcategory = updates.dpoSubcategory;
-    }
     if (typeof updates.category !== 'undefined') {
       doc.category = updates.category;
     }
     await doc.save();
 
-    this.clearSuggestCache();
+    await this.invalidateListsCache();
+    await this.invalidateSuggestCache();
 
     // Возвращаем lean, чтобы не тащить Mongoose Document
     const view = await this.programModel
@@ -403,7 +466,8 @@ export class ProgramsService {
       throw new BadRequestException('Program is not in draft status');
     }
     await this.programModel.findByIdAndDelete(doc._id).exec();
-    this.clearSuggestCache();
+    await this.invalidateListsCache();
+    await this.invalidateSuggestCache();
     return { deleted: true };
   }
 
@@ -434,50 +498,33 @@ export class ProgramsService {
       ? params.categoryIds.map((id) => String(id))
       : [];
 
-    // Ключ кэша: учитываем строку, лимит, статус и категории
-    const cacheKey = JSON.stringify({
-      q: safe,
-      limit,
-      status,
-      cats,
-    });
+    const key = this.cacheKeySuggest({ q: safe, limit, status, cats });
 
-    const cached = this.suggestCache.get(cacheKey);
-    const now = Date.now();
-    if (cached && cached.expires > now) {
-      return cached.data;
-    } else if (cached) {
-      this.suggestCache.delete(cacheKey);
+    const cached = await this.cache.safeGet<ProgramResponseDto[]>(key);
+    if (cached) {
+      return cached;
     }
 
     // Ищем по началу lowercaseTitle — индекс будет задействован
     filter.lowercaseTitle = { $regex: `^${safe}` };
 
-    // Сначала популярные, потом самые новые
-    const cursor = this.programModel
+    const docs = await this.programModel
       .find(filter)
       .sort({ views: -1, createdAt: -1 })
-      .limit(limit);
-
-    cursor.select({
-      title: 1,
-      slug: 1,
-      hours: 1,
-      views: 1,
-      category: 1,
-      categoryType: 1,
-      dpoSubcategory: 1,
-      createdAt: 1,
-    });
-
-    const items = await cursor.lean<AnyProgram[]>().exec();
-    const result = mapPrograms(items);
-
-    // Сохраняем в кэш
-    this.suggestCache.set(cacheKey, {
-      expires: now + this.SUGGEST_TTL_MS,
-      data: result,
-    });
+      .limit(limit)
+      .select({
+        title: 1,
+        slug: 1,
+        category: 1,
+        hours: 1,
+        price: 1,
+        views: 1,
+        createdAt: 1,
+      })
+      .lean<AnyProgram[]>()
+      .exec();
+    const result = mapPrograms(docs);
+    await this.cache.safeSet(key, result, this.SUGGEST_TTL_S);
 
     return result;
   }

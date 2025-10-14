@@ -95,7 +95,10 @@ export class CategoriesController {
     },
   })
   create(@Body() dto: CreateCategoryDto) {
-    return this.categoriesService.create(dto);
+    return this.categoriesService.create(dto).then((created) => ({
+      ...(created.toObject?.() ?? created),
+      editRoure: `/admin/categories/${created.slug}/edit`,
+    }));
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)

@@ -1,23 +1,69 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
 
+export type JsonReviver = (this: any, key: string, value: any) => any;
+export type JsonReplacer = (this: any, key: string, value: any) => any;
+
 @Injectable()
 export class SimpleRedisService {
   private readonly logger = new Logger(SimpleRedisService.name);
-  constructor(@Inject('REDIS') private readonly redis: Redis) {}
+  private readonly jsonReviver?: JsonReviver;
+  private readonly jsonReplacer?: JsonReplacer;
+
+  constructor(
+    @Inject('REDIS') private readonly redis: Redis,
+
+  ) {
+    this.redis.on('connect', () => {
+      this.logger.log('Redis connected');
+    });
+    this.redis.on('ready', () => {
+      this.logger.log('Redis ready');
+    });
+    this.redis.on('error', (err) => {
+      this.logger.error(`Redis error: ${err}`);
+    });
+    this.redis.on('end', () => {
+      this.logger.log('Redis disconnected');
+    });
+    this.redis.on('reconnecting', () => {
+      this.logger.log('Redis reconnecting');
+    });
+  }
+
+  async onModuleDestroy() {
+    try {
+      await this.redis.quit();
+      this.logger.log('Redis connection closed');
+    } catch (err) {
+      this.logger.error(`Redis close error: ${err}`);
+      this.redis.disconnect();
+    }
+  }
 
   async set(key: string, value: unknown, ttlSeconds?: number) {
-    const payload = JSON.stringify(value);
-    if (ttlSeconds && ttlSeconds > 0) {
-      await this.redis.set(key, payload, 'EX', ttlSeconds);
-    } else {
-      await this.redis.set(key, payload);
+    try {
+      const payload = JSON.stringify(value, this.jsonReplacer);
+      if (ttlSeconds && ttlSeconds > 0) {
+        await this.redis.set(key, payload, 'EX', ttlSeconds);
+      } else {
+        await this.redis.set(key, payload);
+      }
+    } catch (err) {
+      this.logger.error(`Redis set error: ${err}`);
+      throw err;
     }
   }
 
   async get<T = unknown>(key: string): Promise<T | null> {
     const str = await this.redis.get(key);
-    return str ? (JSON.parse(str) as T) : null;
+    if (!str) return null;
+    try {
+      return JSON.parse(str, this.jsonReviver) as T;
+    } catch (err) {
+      this.logger.error(`Redis get error: ${err}`);
+      return null;
+    }
   }
 
   async del(key: string) {
@@ -34,7 +80,7 @@ export class SimpleRedisService {
     try {
       return await this.get<T>(key);
     } catch (err) {
-      this.logger.error(`Redis get error: ${err}`);
+      this.logger.warn(`Redis get error: ${err}`);
       return null;
     }
   }
@@ -43,7 +89,7 @@ export class SimpleRedisService {
     try {
       await this.set(key, value, ttlSeconds);
     } catch (err) {
-      this.logger.error(`Redis set error: ${err}`);
+      this.logger.warn(`Redis set error: ${err}`);
     }
   }
 
@@ -51,7 +97,19 @@ export class SimpleRedisService {
     try {
       await this.del(key);
     } catch (err) {
-      this.logger.error(`Redis del error: ${err}`);
+      this.logger.warn(`Redis del error: ${err}`);
     }
+  }
+
+  async getOrSet<T>(
+    key: string,
+    ttlSeconds: number,
+    producer: () => Promise<T>,
+  ): Promise<T> {
+    const cached = await this.safeGet<T>(key);
+    if (cached) return cached;
+    const fresh = await producer();
+    await this.safeSet(key, fresh, ttlSeconds);
+    return fresh;
   }
 }

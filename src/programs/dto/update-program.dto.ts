@@ -33,14 +33,6 @@ export class UpdateProgramDto {
   hours?: number;
 
   @IsOptional()
-  @IsEnum(['dpo', 'prof_training'])
-  categoryType?: 'dpo' | 'prof_training';
-
-  @IsOptional()
-  @IsEnum(['pk', 'pp'])
-  dpoSubcategory?: 'pk' | 'pp';
-
-  @IsOptional()
   @IsString()
   @Matches(slugPattern, {
     message: 'Slug must be lowercase and contain only letters and numbers',
@@ -55,4 +47,8 @@ export class UpdateProgramDto {
   @IsOptional()
   @IsMongoId()
   categoryId?: string;
+
+  @IsOptional()
+  @IsInt()
+  price?: number;
 }

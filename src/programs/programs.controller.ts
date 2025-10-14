@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -40,8 +41,25 @@ export class ProgramsController {
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Post('draft')
-  createDraft() {
-    return this.programsService.createDraft();
+  async createDraft(
+    @Body() dto: { categorySlug: string; categoryId?: string },
+  ) {
+    let categoryId: Types.ObjectId | undefined;
+    if (dto.categorySlug) {
+      const ids =
+        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+          dto.categorySlug,
+        );
+      categoryId = ids[0];
+    } else if (dto.categoryId) {
+      categoryId = new Types.ObjectId(dto.categoryId);
+    }
+    if (!categoryId) {
+      throw new BadRequestException('categorySlug or categoryId is required');
+    }
+    const { id } = await this.programsService.createDraft(categoryId);
+    const editRoute = `/admin/programs/${id}/edit`;
+    return { id, editRoute };
   }
 
   @Get()
@@ -287,8 +305,7 @@ export class ProgramsController {
       title: dto.title,
       description: dto.description,
       hours: dto.hours,
-      categoryType: dto.categoryType,
-      dpoSubcategory: dto.dpoSubcategory,
+      price: dto.price,
       category: categoryId,
     });
   }
