@@ -19,6 +19,7 @@ import { UpdateUserBlockDto } from './dto/update-user-block.dto';
 import { join } from 'path';
 import { unlink } from 'fs/promises';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
+import { SimpleRedisService } from '../redis/redis.service';
 
 export type ChangePasswordResult = { success: true; hint?: string };
 
@@ -29,7 +30,49 @@ export class UsersService {
     private readonly configService: ConfigService,
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
+    private readonly cache: SimpleRedisService,
   ) {}
+
+  private cacheKeyById(id: string) {
+    return `user:byId:${id}`;
+  }
+
+  private cacheKeyByEmail(email: string) {
+    return `user:byEmail:${email.toLowerCase().trim()}`;
+  }
+
+  private keyUsersList(query: ListUsersQueryDto) {
+    const safe = {
+      offset: Math.max(query?.offset ?? 0, 0),
+      limit: Math.min(Math.max(query?.limit ?? 20, 1), 100),
+      sortBy: ['createdAt', 'updatedAt', 'email'].includes(query?.sortBy ?? '')
+        ? query.sortBy
+        : 'createdAt',
+      sortDirection:
+        query?.sortDirection === 1 || query?.sortDirection === -1
+          ? query.sortDirection
+          : -1,
+      role: query?.role ?? null,
+      isBlocked: typeof query?.isBlocked === 'boolean' ? query.isBlocked : null,
+      q: query?.q ?? null,
+    } as const;
+    const row = JSON.stringify(safe);
+    let hash = 0;
+    for (let i = 0; i < row.length; i++) {
+      hash = (hash * 31 + row.charCodeAt(i)) | 0;
+    }
+    return `users:list:${hash}`;
+  }
+
+  private async invalidateUserCache(u: {
+    _id: Types.ObjectId;
+    email: string | null;
+  }) {
+    await this.cache.safeDel(this.cacheKeyById(u._id.toString()));
+    if (u.email) {
+      await this.cache.safeDel(this.cacheKeyByEmail(u.email));
+    }
+  }
 
   private escapeRegExp(input: string): string {
     // экранируем спецсимволы RegExp, чтобы не падать на пользовательском вводе
@@ -76,6 +119,10 @@ export class UsersService {
         firstName: dto.firstName?.trim(),
         lastName: dto.lastName?.trim(),
       });
+      await this.invalidateUserCache({
+        _id: created._id,
+        email: created.email,
+      });
       return {
         id: String(created._id),
         email: created.email,
@@ -97,16 +144,23 @@ export class UsersService {
   }
 
   async findById(id: string) {
-    return await this.userModel
-      .findById(id)
-      .select('-passwordHash')
-      .lean()
-      .exec();
+    const key = this.cacheKeyById(id);
+    const val = await this.cache.getOrSet(key, 60, async () => {
+      const user = await this.userModel.findById(id).lean();
+      if (!user) return null;
+      Reflect.deleteProperty(user, 'passwordHash');
+      return user;
+    });
+    if (!val) throw new NotFoundException('User not found');
+    return val;
   }
 
   async findByEmail(email: string) {
     const normalized = email.toLowerCase().trim();
-    return this.userModel.findOne({ email: normalized }).exec();
+    const key = this.cacheKeyByEmail(normalized);
+    return this.cache.getOrSet(key, 120, async () => {
+      return this.userModel.findOne({ email: normalized }).exec();
+    });
   }
 
   async findAuthById(userId: string) {
@@ -129,6 +183,7 @@ export class UsersService {
     user.passwordHash = await bcrypt.hash(newPassword, this.getBcryptRounds());
     await user.save();
     await this.authService.logoutAll(userId);
+    await this.invalidateUserCache({ _id: user._id, email: user.email });
     return { success: true };
   }
 
@@ -160,7 +215,7 @@ export class UsersService {
     const avatarUrl = join('uploads', 'avatars', safeEmail, filename);
     user.avatarUrl = avatarUrl;
     await user.save();
-
+    await this.invalidateUserCache({ _id: user._id, email: user.email });
     return { avatarUrl };
   }
 
@@ -174,76 +229,80 @@ export class UsersService {
       await this.deleteAvatarFile(user.avatarUrl);
       user.avatarUrl = undefined;
       await user.save();
+      await this.invalidateUserCache({ _id: user._id, email: user.email });
     }
 
     return user;
   }
 
   async usersList(query: ListUsersQueryDto) {
-    // Безопасные дефолты и нормализация
-    const offset = Math.max(query?.offset ?? 0, 0);
-    const limit = Math.min(Math.max(query?.limit ?? 20, 1), 100);
+    const key = this.keyUsersList(query);
+    return this.cache.getOrSet(key, 60, async () => {
+      // Безопасные дефолты и нормализация
+      const offset = Math.max(query?.offset ?? 0, 0);
+      const limit = Math.min(Math.max(query?.limit ?? 20, 1), 100);
 
-    type AllowedSort = 'createdAt' | 'updatedAt' | 'email';
-    const allowedSort: readonly AllowedSort[] = [
-      'createdAt',
-      'updatedAt',
-      'email',
-    ];
-    let sortBy: AllowedSort = 'createdAt';
-    if (query?.sortBy && allowedSort.includes(query.sortBy)) {
-      sortBy = query.sortBy;
-    }
-    const sortDirection: 1 | -1 =
-      query?.sortDirection === 1 || query?.sortDirection === -1
-        ? query.sortDirection
-        : -1;
-
-    // Фильтры
-    const where: Record<string, unknown> = {};
-    if (query?.role) {
-      where.role = query.role;
-    }
-    if (typeof query?.isBlocked === 'boolean') {
-      where.isBlocked = query.isBlocked;
-    }
-
-    const q = query.q?.trim();
-    if (q && q.length >= 2) {
-      const needle = new RegExp(this.escapeRegExp(q), 'i');
-      where.$or = [
-        { email: needle },
-        { firstName: needle },
-        { lastName: needle },
+      type AllowedSort = 'createdAt' | 'updatedAt' | 'email';
+      const allowedSort: readonly AllowedSort[] = [
+        'createdAt',
+        'updatedAt',
+        'email',
       ];
-    }
+      let sortBy: AllowedSort = 'createdAt';
+      if (query?.sortBy && allowedSort.includes(query.sortBy)) {
+        sortBy = query.sortBy;
+      }
+      const sortDirection: 1 | -1 =
+        query?.sortDirection === 1 || query?.sortDirection === -1
+          ? query.sortDirection
+          : -1;
 
-    const [items, total] = await Promise.all([
-      this.userModel
-        .find(where, { passwordHash: 0 })
-        .sort({ [sortBy]: sortDirection })
-        .skip(offset)
-        .limit(limit)
-        .lean()
-        .exec(),
-      this.userModel.countDocuments(where).exec(),
-    ]);
-    return {
-      data: items,
-      meta: {
-        total,
-        offset,
-        limit,
-        sortBy,
-        sortDirection,
-        filters: {
-          role: query.role ?? null,
-          isBlocked:
-            typeof query.isBlocked === 'boolean' ? query.isBlocked : null,
-          q: q ?? null,
+      // Фильтры
+      const where: Record<string, unknown> = {};
+      if (query?.role) {
+        where.role = query.role;
+      }
+      if (typeof query?.isBlocked === 'boolean') {
+        where.isBlocked = query.isBlocked;
+      }
+
+      const q = query.q?.trim();
+      if (q && q.length >= 2) {
+        const needle = new RegExp(this.escapeRegExp(q), 'i');
+        where.$or = [
+          { email: needle },
+          { firstName: needle },
+          { lastName: needle },
+        ];
+      }
+
+      const [items, total] = await Promise.all([
+        this.userModel
+          .find(where, { passwordHash: 0 })
+          .sort({ [sortBy]: sortDirection })
+          .skip(offset)
+          .limit(limit)
+          .lean()
+          .exec(),
+        this.userModel.countDocuments(where).exec(),
+      ]);
+      return {
+        data: items,
+        meta: {
+          total,
+          offset,
+          limit,
+          sortBy,
+          sortDirection,
+          filters: {
+            role: query.role ?? null,
+            isBlocked:
+              typeof query.isBlocked === 'boolean' ? query.isBlocked : null,
+            q: q ?? null,
+          },
         },
-      },
-    };
+      };
+    });
   }
 
   async findAdminById(id: string) {
@@ -301,6 +360,7 @@ export class UsersService {
     if (!updated) {
       throw new BadRequestException('User not found');
     }
+    await this.invalidateUserCache({ _id, email: updated.email });
     return updated;
   }
 
@@ -361,6 +421,7 @@ export class UsersService {
     if (dto.isBlocked) {
       await this.authService.logoutAll(id);
     }
+    await this.invalidateUserCache({ _id, email: updated.email });
     return updated;
   }
 
@@ -372,6 +433,7 @@ export class UsersService {
     if (!deleted) {
       throw new BadRequestException('User not found');
     }
-    return { id, deleted: true };
+    await this.invalidateUserCache({ _id, email: deleted.email });
+    return { id, deleted: true } as const;
   }
 }
