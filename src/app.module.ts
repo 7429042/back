@@ -53,7 +53,6 @@ import { DebugController } from './debug/debug.controller';
         RATE_LIMIT_MAX: Joi.number().integer().min(1).max(1000).default(10),
         CSRF_HMAC_SECRET: Joi.string().min(16).required(),
       }),
-
     }),
     MongooseModule.forRootAsync({
       inject: [ConfigService],

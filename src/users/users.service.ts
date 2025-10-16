@@ -16,10 +16,11 @@ import { ConfigService } from '@nestjs/config';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthService } from '../auth/auth.service';
 import { UpdateUserBlockDto } from './dto/update-user-block.dto';
-import { join } from 'path';
+import { basename, join, normalize, sep } from 'path';
 import { unlink } from 'fs/promises';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
 import { SimpleRedisService } from '../redis/redis.service';
+import { AuthUtilsService } from '../auth/services/auth-utils';
 
 export type ChangePasswordResult = { success: true; hint?: string };
 
@@ -31,6 +32,7 @@ export class UsersService {
     @Inject(forwardRef(() => AuthService))
     private readonly authService: AuthService,
     private readonly cache: SimpleRedisService,
+    private readonly utils: AuthUtilsService,
   ) {}
 
   private cacheKeyById(id: string) {
@@ -79,10 +81,6 @@ export class UsersService {
     return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  private getBcryptRounds(): number {
-    return this.configService.get<number>('BCRYPT_ROUNDS', 10);
-  }
-
   async onModuleInit() {
     const email = this.configService.get<string>('ADMIN_EMAIL');
     const password = this.configService.get<string>('ADMIN_PASSWORD');
@@ -92,7 +90,10 @@ export class UsersService {
     const exist = await this.userModel.exists({ email: normalized });
     if (exist) return;
 
-    const passwordHash = await bcrypt.hash(password, this.getBcryptRounds());
+    const passwordHash = await bcrypt.hash(
+      password,
+      this.utils.getBcryptRounds(),
+    );
     await this.userModel.create({
       email: normalized,
       passwordHash,
@@ -110,7 +111,7 @@ export class UsersService {
     const email = dto.email.toLowerCase().trim();
     const passwordHash = await bcrypt.hash(
       dto.password,
-      this.getBcryptRounds(),
+      this.utils.getBcryptRounds(),
     );
     try {
       const created = await this.userModel.create({
@@ -130,8 +131,8 @@ export class UsersService {
         lastName: created.lastName ?? null,
         role: created.role,
         isBlocked: created.isBlocked,
-        createdAt: created['createdAt'] as Date | undefined,
-        updatedAt: created['updatedAt'] as Date | undefined,
+        createdAt: created['createdAt'] as Date,
+        updatedAt: created['updatedAt'] as Date,
       };
     } catch (e) {
       if (e instanceof MongoServerError && e.code === 11000) {
@@ -158,7 +159,7 @@ export class UsersService {
   async findByEmail(email: string) {
     const normalized = email.toLowerCase().trim();
     const key = this.cacheKeyByEmail(normalized);
-    return this.cache.getOrSet(key, 120, async () => {
+    return this.cache.getOrSet(key, 60, async () => {
       return this.userModel.findOne({ email: normalized }).exec();
     });
   }
@@ -180,7 +181,10 @@ export class UsersService {
     if (!isMatch) {
       throw new BadRequestException('Old password is incorrect');
     }
-    user.passwordHash = await bcrypt.hash(newPassword, this.getBcryptRounds());
+    user.passwordHash = await bcrypt.hash(
+      newPassword,
+      this.utils.getBcryptRounds(),
+    );
     await user.save();
     await this.authService.logoutAll(userId);
     await this.invalidateUserCache({ _id: user._id, email: user.email });
@@ -189,10 +193,12 @@ export class UsersService {
 
   private async deleteAvatarFile(avatarUrl: string): Promise<void> {
     try {
-      const avatarPath = join(process.cwd(), avatarUrl);
+      const avatarPath = normalize(join(process.cwd(), avatarUrl));
       await unlink(avatarPath);
     } catch (error) {
-      console.error('Ошибка удаления аватара:', error);
+      if ((error as { code?: string })?.code !== 'ENOENT') {
+        console.error('Ошибка удаления аватара:', error);
+      }
     }
   }
 
@@ -212,11 +218,21 @@ export class UsersService {
     }
 
     const safeEmail = userEmail.replace(/[@.]/g, '_');
-    const avatarUrl = join('uploads', 'avatars', safeEmail, filename);
-    user.avatarUrl = avatarUrl;
+    const baseDir = join('uploads', 'avatars', safeEmail);
+    const baseDirNorm = normalize(baseDir + sep);
+
+    const safeName = basename(filename);
+    const avatarRel = join(baseDir, safeName);
+    const avatarNorm = normalize(avatarRel);
+
+    if (!avatarNorm.startsWith(baseDirNorm)) {
+      throw new BadRequestException('Invalid avatar filename');
+    }
+
+    user.avatarUrl = avatarNorm;
     await user.save();
     await this.invalidateUserCache({ _id: user._id, email: user.email });
-    return { avatarUrl };
+    return { avatarUrl: avatarNorm };
   }
 
   async deleteAvatar(userId: string): Promise<User> {
@@ -237,7 +253,7 @@ export class UsersService {
 
   async usersList(query: ListUsersQueryDto) {
     const key = this.keyUsersList(query);
-    return this.cache.getOrSet(key, 60, async () => {
+    return this.cache.getOrSet(key, 30, async () => {
       // Безопасные дефолты и нормализация
       const offset = Math.max(query?.offset ?? 0, 0);
       const limit = Math.min(Math.max(query?.limit ?? 20, 1), 100);
@@ -371,7 +387,7 @@ export class UsersService {
 
     const passwordHash = await bcrypt.hash(
       dto.password,
-      this.getBcryptRounds(),
+      this.utils.getBcryptRounds(),
     );
     const doc = await this.userModel.create({
       email,

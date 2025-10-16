@@ -2,9 +2,9 @@ import { forwardRef, Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { PassportModule } from '@nestjs/passport';
-import { JwtStrategy } from './jwt.strategy';
+import { JwtStrategy } from './srtategies/jwt.strategy';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt';
 import { UsersModule } from '../users/users.module';
 import { MongooseModule } from '@nestjs/mongoose';
 import {
@@ -13,6 +13,10 @@ import {
 } from './schemas/refresh-session.schema';
 import { RedisModule } from '../redis/redis.module';
 import { RateLimitGuard } from './guards/rate-limit.guard';
+import { TokensService } from './services/tokens.services';
+import { CookiesService } from './services/cookies.service';
+import { SessionsService } from './services/sessions.service';
+import { AuthUtilsService } from './services/auth-utils';
 
 @Module({
   imports: [
@@ -21,12 +25,13 @@ import { RateLimitGuard } from './guards/rate-limit.guard';
     forwardRef(() => UsersModule),
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
+      useFactory: (config: ConfigService): JwtModuleOptions => {
         const secret = config.get<string>('JWT_SECRET');
-        const expiresIn = config.get<string>('JWT_EXPIRES_IN') ?? '1h';
+        const expiresInRaw = config.get<string>('JWT_EXPIRES_IN') ?? '1h';
         if (!secret) {
           throw new Error('JWT_SECRET is not set\n');
         }
+        const expiresIn = expiresInRaw as JwtSignOptions['expiresIn'];
         return {
           secret,
           signOptions: { expiresIn },
@@ -39,7 +44,15 @@ import { RateLimitGuard } from './guards/rate-limit.guard';
     RedisModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, RateLimitGuard],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    RateLimitGuard,
+    TokensService,
+    CookiesService,
+    SessionsService,
+    AuthUtilsService,
+  ],
   exports: [PassportModule, AuthService],
 })
 export class AuthModule {}

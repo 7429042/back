@@ -7,10 +7,12 @@ export type JsonReplacer = (this: any, key: string, value: any) => any;
 @Injectable()
 export class SimpleRedisService {
   private readonly logger = new Logger(SimpleRedisService.name);
-  private readonly jsonReviver?: JsonReviver;
-  private readonly jsonReplacer?: JsonReplacer;
 
-  constructor(@Inject('REDIS') private readonly redis: Redis) {
+  constructor(
+    @Inject('REDIS') private readonly redis: Redis,
+    @Inject('REDIS_JSON_REVIVER') private readonly jsonReviver?: JsonReviver,
+    @Inject('REDIS_JSON_REPLACER') private readonly jsonReplacer?: JsonReplacer,
+  ) {
     this.redis.on('connect', () => {
       this.logger.log('Redis connected');
     });
@@ -41,8 +43,11 @@ export class SimpleRedisService {
   async set(key: string, value: unknown, ttlSeconds?: number) {
     try {
       const payload = JSON.stringify(value, this.jsonReplacer);
-      if (ttlSeconds && ttlSeconds > 0) {
-        await this.redis.set(key, payload, 'EX', ttlSeconds);
+      const ttl = Number.isFinite(ttlSeconds)
+        ? Math.floor(ttlSeconds as number)
+        : undefined;
+      if (ttl && ttl > 0) {
+        await this.redis.set(key, payload, 'EX', ttl);
       } else {
         await this.redis.set(key, payload);
       }
@@ -104,7 +109,7 @@ export class SimpleRedisService {
     producer: () => Promise<T>,
   ): Promise<T> {
     const cached = await this.safeGet<T>(key);
-    if (cached) return cached;
+    if (cached !== null && cached !== undefined) return cached as T;
     const fresh = await producer();
     await this.safeSet(key, fresh, ttlSeconds);
     return fresh;

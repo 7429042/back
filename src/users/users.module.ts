@@ -3,13 +3,14 @@ import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
 import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from './schemas/userSchema';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
+import { AuthUtilsService } from '../auth/services/auth-utils';
 
 @Module({
   controllers: [UsersController],
-  providers: [UsersService],
+  providers: [UsersService, AuthUtilsService],
   imports: [
     MongooseModule.forFeature([
       {
@@ -20,12 +21,13 @@ import { AuthModule } from '../auth/auth.module';
     forwardRef(() => AuthModule),
     JwtModule.registerAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
+      useFactory: (config: ConfigService): JwtModuleOptions => {
         const secret = config.get<string>('JWT_SECRET');
-        const expiresIn = config.get<string>('JWT_EXPIRES_IN') ?? '1h';
+        const expiresInRaw = config.get<string>('JWT_EXPIRES_IN') ?? '1h';
         if (!secret) {
           throw new Error('JWT_SECRET is not set\n');
         }
+        const expiresIn = expiresInRaw as JwtSignOptions['expiresIn'];
         return {
           secret,
           signOptions: { expiresIn },
