@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import Redis from 'ioredis';
 
 export type JsonReviver = (this: any, key: string, value: any) => any;
@@ -10,8 +10,12 @@ export class SimpleRedisService {
 
   constructor(
     @Inject('REDIS') private readonly redis: Redis,
-    @Inject('REDIS_JSON_REVIVER') private readonly jsonReviver?: JsonReviver,
-    @Inject('REDIS_JSON_REPLACER') private readonly jsonReplacer?: JsonReplacer,
+    @Optional()
+    @Inject('REDIS_JSON_REVIVER')
+    private readonly jsonReviver?: JsonReviver,
+    @Optional()
+    @Inject('REDIS_JSON_REPLACER')
+    private readonly jsonReplacer?: JsonReplacer,
   ) {
     this.redis.on('connect', () => {
       this.logger.log('Redis connected');
