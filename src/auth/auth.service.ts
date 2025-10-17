@@ -16,6 +16,7 @@ import { TokensService } from './services/tokens.services';
 import { CookiesService } from './services/cookies.service';
 import { SessionsService } from './services/sessions.service';
 import { AuthUtilsService } from './services/auth-utils';
+import { BruteForceService } from './services/brute-force.service';
 
 export type RevokeSessionResult = { success: true; message?: string };
 
@@ -28,6 +29,7 @@ export class AuthService {
     private readonly cookies: CookiesService,
     private readonly sessions: SessionsService,
     private readonly utils: AuthUtilsService,
+    private readonly bruteForce: BruteForceService,
   ) {}
 
   async login(
@@ -35,15 +37,43 @@ export class AuthService {
     meta?: { ip?: string; userAgent?: string },
     res?: Response,
   ) {
+    const ip = meta?.ip || 'unknown';
+
+    if (await this.bruteForce.isBlocked(dto.email, ip)) {
+      const blockInfo = await this.bruteForce.getBlockInfo(dto.email, ip);
+      const ttlMinutes = Math.ceil(blockInfo.emailTtl / 60);
+      throw new ForbiddenException(
+        `Too many failed login attempts. Please try again in ${ttlMinutes} minute(s).`,
+      );
+    }
+
     const user = await this.usersService.findByEmail(dto.email);
-    if (!user) throw new BadRequestException('Invalid email or password');
+    if (!user) {
+      await this.bruteForce.recordFailedAttempt(dto.email, ip);
+      throw new BadRequestException('Invalid email or password');
+    }
 
     if (user.isBlocked) {
       throw new ForbiddenException('User is blocked');
     }
 
     const isMatch = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!isMatch) throw new BadRequestException('Invalid email or password');
+    if (!isMatch) {
+      await this.bruteForce.recordFailedAttempt(dto.email, ip);
+      const blockInfo = await this.bruteForce.getBlockInfo(dto.email, ip);
+      const remaining = Math.max(0, 5 - blockInfo.emailAttempts);
+      if (remaining > 0) {
+        throw new BadRequestException(
+          `Invalid email or password. ${remaining} attempt(s) remaining.`,
+        );
+      } else {
+        throw new ForbiddenException(
+          'Too many failed login attempts. Please try again in 15 minutes.',
+        );
+      }
+    }
+
+    await this.bruteForce.resetEmailAttempts(dto.email);
 
     const payload = {
       sub: user._id.toString(),
@@ -66,7 +96,7 @@ export class AuthService {
 
     await this.sessions.enforceSessionLimit(user._id);
 
-    const obj = user.toObject();
+    const obj = typeof user.toObject === 'function' ? user.toObject() : user;
     Reflect.deleteProperty(obj, 'passwordHash');
     if (res) this.cookies.setAuthCookies(res, accessToken, refreshToken);
     return {

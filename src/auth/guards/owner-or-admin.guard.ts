@@ -3,16 +3,18 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  Logger,
 } from '@nestjs/common';
 import type { Request } from 'express';
 
-// ... existing code ...
 @Injectable()
 export class OwnerOrAdminGuard implements CanActivate {
+  private readonly logger = new Logger(OwnerOrAdminGuard.name);
+
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<
       Request & {
-        user?: { sub?: string; role?: string };
+        user?: { sub?: string; role?: string; email?: string };
         params: { userId?: string; id?: string };
       }
     >();
@@ -21,16 +23,17 @@ export class OwnerOrAdminGuard implements CanActivate {
     if (role === 'admin') return true;
 
     const currentUserId = req.user?.sub;
-    const paramUserId = req.params?.userId;
-    const paramId = req.params?.id;
+    const targetUserId = req.params?.userId || req.params?.id;
 
-    if (paramUserId && currentUserId && paramUserId === currentUserId) {
+    if (targetUserId && currentUserId && targetUserId === currentUserId) {
       return true;
     }
 
-    if (paramId && currentUserId) {
-      return true;
-    }
+    this.logger.warn(
+      `Access denied: User ${currentUserId} (${req.user?.email}) ` +
+        `tried to access resource of user ${targetUserId}. ` +
+        `Path: ${req.method} ${req.url}`,
+    );
 
     throw new ForbiddenException('Access denied');
   }

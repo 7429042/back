@@ -1,8 +1,16 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import Redis from 'ioredis';
 
-export type JsonReviver = (this: any, key: string, value: any) => any;
-export type JsonReplacer = (this: any, key: string, value: any) => any;
+export type JsonReviver = (
+  this: unknown,
+  key: string,
+  value: unknown,
+) => unknown;
+export type JsonReplacer = (
+  this: unknown,
+  key: string,
+  value: unknown,
+) => unknown;
 
 @Injectable()
 export class SimpleRedisService {
@@ -118,10 +126,48 @@ export class SimpleRedisService {
     await this.safeSet(key, fresh, ttlSeconds);
     return fresh;
   }
+
   async incr(key: string): Promise<number> {
     return this.redis.incr(key);
   }
+
   async expire(key: string, ttlSeconds: number): Promise<number> {
     return this.redis.expire(key, ttlSeconds);
+  }
+
+  async ttl(key: string): Promise<number> {
+    return this.redis.ttl(key);
+  }
+
+  async safeTtl(key: string): Promise<number | null> {
+    try {
+      return await this.ttl(key);
+    } catch (err) {
+      this.logger.warn(`Redis ttl error: ${err}`);
+      return null;
+    }
+  }
+
+  async exists(key: string): Promise<boolean> {
+    const res = await this.redis.exists(key);
+    return res === 1;
+  }
+
+  async mget<T = unknown>(keys: string[]): Promise<(T | null)[]> {
+    const values = await this.redis.mget(...keys);
+    return values.map((v) => {
+      if (!v) return null;
+      try {
+        return JSON.parse(v, this.jsonReviver) as T;
+      } catch (err) {
+        this.logger.error(`Redis mget error: ${err}`);
+        return null;
+      }
+    });
+  }
+
+  async setex(key: string, value: unknown, ttlSeconds: number) {
+    const payload = JSON.stringify(value, this.jsonReplacer);
+    await this.redis.setex(key, Math.floor(ttlSeconds), payload);
   }
 }

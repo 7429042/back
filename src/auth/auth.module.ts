@@ -2,7 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { PassportModule } from '@nestjs/passport';
-import { JwtStrategy } from './srtategies/jwt.strategy';
+import { JwtStrategy } from './strategies/jwt.strategy';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt';
 import { UsersModule } from '../users/users.module';
@@ -17,6 +17,7 @@ import { TokensService } from './services/tokens.services';
 import { CookiesService } from './services/cookies.service';
 import { SessionsService } from './services/sessions.service';
 import { AuthUtilsService } from './services/auth-utils';
+import { BruteForceService } from './services/brute-force.service';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { AuthUtilsService } from './services/auth-utils';
     CookiesService,
     SessionsService,
     AuthUtilsService,
+    BruteForceService,
   ],
   exports: [PassportModule, AuthService],
 })
