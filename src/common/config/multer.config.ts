@@ -6,9 +6,14 @@ import { Request } from 'express';
 
 interface RequestWithUser extends Request {
   user?: {
-    id: string;
-    email: string;
+    sub?: string;
+    email?: string;
+    role?: string;
   };
+}
+
+function sanitizeEmail(email: string): string {
+  return email.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 export const multerConfig = {
@@ -44,7 +49,7 @@ export const multerOptions = {
       // Получаем email пользователя из запроса
       const userEmail = req.user?.email || 'unknown';
       // Создаем безопасное имя папки из email (заменяем @ и . на _)
-      const safeEmail = userEmail.replace(/[@.]/g, '_');
+      const safeEmail = sanitizeEmail(userEmail);
       const uploadPath = `${multerConfig.dest}/${safeEmail}`;
 
       if (!existsSync(uploadPath)) {
@@ -58,7 +63,7 @@ export const multerOptions = {
       cb: (error: Error | null, filename: string) => void,
     ) => {
       const userEmail = req.user?.email || 'unknown';
-      const safeEmail = userEmail.replace(/[@.]/g, '_');
+      const safeEmail = sanitizeEmail(userEmail);
       const timestamp = Date.now();
       const ext = extname(file.originalname);
       // Формат: email_timestamp.ext (например: user_example_com_1234567890.jpg)
@@ -86,7 +91,8 @@ export const categoriesMulterOptions = {
   storage: diskStorage({
     destination: (req: Request, file, cb) => {
       const slug = req.params?.slug || 'unknown';
-      const uploadPath = `./uploads/categories/${slug}`;
+      const safeSlug = slug.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const uploadPath = `./uploads/categories/${safeSlug}`;
       if (!existsSync(uploadPath)) mkdirSync(uploadPath, { recursive: true });
       cb(null, uploadPath);
     },

@@ -18,6 +18,7 @@ import { CookiesService } from './services/cookies.service';
 import { SessionsService } from './services/sessions.service';
 import { AuthUtilsService } from './services/auth-utils';
 import { BruteForceService } from './services/brute-force.service';
+import { AuditService } from './services/audit.service';
 
 @Module({
   imports: [
@@ -54,7 +55,8 @@ import { BruteForceService } from './services/brute-force.service';
     SessionsService,
     AuthUtilsService,
     BruteForceService,
+    AuditService,
   ],
-  exports: [PassportModule, AuthService],
+  exports: [PassportModule, AuthService, AuditService],
 })
 export class AuthModule {}

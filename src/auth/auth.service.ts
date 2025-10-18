@@ -17,6 +17,7 @@ import { CookiesService } from './services/cookies.service';
 import { SessionsService } from './services/sessions.service';
 import { AuthUtilsService } from './services/auth-utils';
 import { BruteForceService } from './services/brute-force.service';
+import { AuditEvent, AuditService } from './services/audit.service';
 
 export type RevokeSessionResult = { success: true; message?: string };
 
@@ -30,6 +31,7 @@ export class AuthService {
     private readonly sessions: SessionsService,
     private readonly utils: AuthUtilsService,
     private readonly bruteForce: BruteForceService,
+    private readonly audit: AuditService,
   ) {}
 
   async login(
@@ -42,6 +44,9 @@ export class AuthService {
     if (await this.bruteForce.isBlocked(dto.email, ip)) {
       const blockInfo = await this.bruteForce.getBlockInfo(dto.email, ip);
       const ttlMinutes = Math.ceil(blockInfo.emailTtl / 60);
+
+      this.audit.logBruteForceBlock(dto.email, ip, blockInfo.emailAttempts);
+
       throw new ForbiddenException(
         `Too many failed login attempts. Please try again in ${ttlMinutes} minute(s).`,
       );
@@ -50,10 +55,12 @@ export class AuthService {
     const user = await this.usersService.findByEmail(dto.email);
     if (!user) {
       await this.bruteForce.recordFailedAttempt(dto.email, ip);
+      this.audit.logLoginFailed(dto.email, ip, 'User not found');
       throw new BadRequestException('Invalid email or password');
     }
 
     if (user.isBlocked) {
+      this.audit.logLoginFailed(dto.email, ip, 'User is blocked');
       throw new ForbiddenException('User is blocked');
     }
 
@@ -62,6 +69,9 @@ export class AuthService {
       await this.bruteForce.recordFailedAttempt(dto.email, ip);
       const blockInfo = await this.bruteForce.getBlockInfo(dto.email, ip);
       const remaining = Math.max(0, 5 - blockInfo.emailAttempts);
+
+      this.audit.logLoginFailed(dto.email, ip, 'Invalid password');
+
       if (remaining > 0) {
         throw new BadRequestException(
           `Invalid email or password. ${remaining} attempt(s) remaining.`,
@@ -95,6 +105,13 @@ export class AuthService {
     });
 
     await this.sessions.enforceSessionLimit(user._id);
+
+    this.audit.logLoginSuccess(
+      user._id.toString(),
+      user.email,
+      ip,
+      meta?.userAgent,
+    );
 
     const obj = typeof user.toObject === 'function' ? user.toObject() : user;
     Reflect.deleteProperty(obj, 'passwordHash');
@@ -189,6 +206,8 @@ export class AuthService {
       .verifyRefresh<{
         jti?: string;
         sub: string;
+        email?: string;
+        role?: string;
       }>(refreshTokenFromCookie)
       .catch(() => null);
 
@@ -198,6 +217,10 @@ export class AuthService {
         new Types.ObjectId(decoded.sub),
       );
       if (session) await this.sessions.revokeAndCache(session);
+      this.audit.info(AuditEvent.LOGOUT, 'User logged out', {
+        userId: decoded.sub,
+        email: decoded.email,
+      });
     }
     if (res) this.cookies.clearAuthCookies(res);
     return { success: true } as const;
@@ -205,6 +228,9 @@ export class AuthService {
 
   async logoutAll(userId: string) {
     await this.sessions.revokeAll(new Types.ObjectId(userId));
+    this.audit.info(AuditEvent.LOGOUT_ALL, 'User logged out from all devices', {
+      userId,
+    });
   }
 
   async listSessions(userId: string) {

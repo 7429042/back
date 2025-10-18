@@ -31,6 +31,7 @@ import {
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
+import { ParseObjectIdPipe } from '@nestjs/mongoose';
 
 @Controller('users')
 export class UsersController {
@@ -78,20 +79,24 @@ export class UsersController {
     },
   })
   async updateAvatar(
-    @Req() req: Request & { user: { id: string; email: string } },
+    @UserId() userId: string,
+    @Req() req: Request & { user?: { email?: string } },
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (!file) {
       throw new BadRequestException('Файл не загружен');
     }
-    const user = await this.usersService.updateAvatar(
-      req.user.id,
+
+    const email = req.user?.email || 'unknown';
+
+    const result = await this.usersService.updateAvatar(
+      userId,
       file.filename,
-      req.user.email,
+      email,
     );
     return {
       message: 'Аватар успешно загружен',
-      avatarUrl: user.avatarUrl,
+      avatarUrl: result.avatarUrl,
     };
   }
 
@@ -99,8 +104,8 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Удалить аватар пользователя' })
   @ApiBearerAuth()
-  async deleteAvatar(@Req() req: Request & { user: { id: string } }) {
-    await this.usersService.deleteAvatar(req.user.id);
+  async deleteAvatar(@UserId() userId: string) {
+    await this.usersService.deleteAvatar(userId);
     return {
       message: 'Аватар успешно удалён',
     };
@@ -114,25 +119,31 @@ export class UsersController {
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Get(':id')
-  async getUserById(@Param('id') id: string) {
+  async getUserById(@Param('id', ParseObjectIdPipe) id: string) {
     return this.usersService.findById(id);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id')
-  async updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto) {
+  async updateUser(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Body() dto: UpdateUserDto,
+  ) {
     return this.usersService.updateByAdmin(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Patch(':id/block')
-  async blockToggle(@Param('id') id: string, @Body() dto: UpdateUserBlockDto) {
+  async blockToggle(
+    @Param('id', ParseObjectIdPipe) id: string,
+    @Body() dto: UpdateUserBlockDto,
+  ) {
     return this.usersService.setBlockByAdmin(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @Delete(':id')
-  async deleteUser(@Param('id') id: string) {
+  async deleteUser(@Param('id', ParseObjectIdPipe) id: string) {
     return this.usersService.deleteByAdmin(id);
   }
 

@@ -16,7 +16,7 @@ import { ConfigService } from '@nestjs/config';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { AuthService } from '../auth/auth.service';
 import { UpdateUserBlockDto } from './dto/update-user-block.dto';
-import { basename, join, normalize, sep } from 'path';
+import { basename, extname, join, normalize, sep } from 'path';
 import { unlink } from 'fs/promises';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
 import { SimpleRedisService } from '../redis/redis.service';
@@ -26,6 +26,15 @@ export type ChangePasswordResult = { success: true; hint?: string };
 
 @Injectable()
 export class UsersService {
+  private readonly ALLOWED_AVATAR_EXTENSIONS = [
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.webp',
+  ];
+  private readonly MAX_AVATAR_SIZE_MB = 5;
+
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     private readonly configService: ConfigService,
@@ -212,12 +221,14 @@ export class UsersService {
       throw new NotFoundException('Пользователь не найден');
     }
 
-    // Удаляем старый аватар, если есть
-    if (user.avatarUrl) {
-      await this.deleteAvatarFile(user.avatarUrl);
+    const ext = extname(filename).toLowerCase();
+    if (!this.ALLOWED_AVATAR_EXTENSIONS.includes(ext)) {
+      throw new BadRequestException(
+        `Недопустимое расширение файла. Разрешены: ${this.ALLOWED_AVATAR_EXTENSIONS.join(', ')}`,
+      );
     }
 
-    const safeEmail = userEmail.replace(/[@.]/g, '_');
+    const safeEmail = userEmail.replace(/[^a-zA-Z0-9_-]/g, '_');
     const baseDir = join('uploads', 'avatars', safeEmail);
     const baseDirNorm = normalize(baseDir + sep);
 
@@ -226,13 +237,26 @@ export class UsersService {
     const avatarNorm = normalize(avatarRel);
 
     if (!avatarNorm.startsWith(baseDirNorm)) {
-      throw new BadRequestException('Invalid avatar filename');
+      throw new BadRequestException('Недопустимое имя файла');
     }
 
-    user.avatarUrl = avatarNorm;
+    const fullPath = join(process.cwd(), avatarNorm);
+    try {
+      await import('fs/promises').then((fs) => fs.access(fullPath));
+    } catch {
+      throw new BadRequestException('Файл аватара не найден на сервере');
+    }
+
+    if (user.avatarUrl) {
+      await this.deleteAvatarFile(user.avatarUrl);
+    }
+
+    const normalizedPath = avatarNorm.replace(/\\/g, '/');
+
+    user.avatarUrl = normalizedPath;
     await user.save();
     await this.invalidateUserCache({ _id: user._id, email: user.email });
-    return { avatarUrl: avatarNorm };
+    return { avatarUrl: normalizedPath };
   }
 
   async deleteAvatar(userId: string): Promise<User> {
@@ -333,13 +357,24 @@ export class UsersService {
     targetUserId: Types.ObjectId,
     nextRole?: Role,
   ) {
-    if (!nextRole) return;
-    if (nextRole !== Role.ADMIN) {
-      const [target, adminCount] = await Promise.all([
-        this.userModel.findById(targetUserId).lean().exec(),
-        this.userModel.countDocuments({ role: Role.ADMIN }),
-      ]);
-      if (target?.role === Role.ADMIN && adminCount <= 1) {
+    if (!nextRole || nextRole === Role.ADMIN) return;
+    const result = await this.userModel.updateOne({
+      _id: targetUserId,
+      role: Role.ADMIN,
+      $where: function () {
+        return db.users.countDocuments({ role: 'admin' }) > 1;
+      },
+    });
+    {
+      role: nextRole;
+    }
+    if (result.matchedCount === 0) {
+      // Либо пользователь не найден, либо он последний админ
+      const target = await this.userModel.findById(targetUserId).lean().exec();
+      if (!target) {
+        throw new BadRequestException('User not found');
+      }
+      if (target.role === Role.ADMIN) {
         throw new BadRequestException('Cannot remove last admin');
       }
     }

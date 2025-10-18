@@ -6,10 +6,13 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { AuditService } from '../services/audit.service';
 
 @Injectable()
 export class OwnerOrAdminGuard implements CanActivate {
   private readonly logger = new Logger(OwnerOrAdminGuard.name);
+
+  constructor(private readonly audit: AuditService) {}
 
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<
@@ -28,6 +31,13 @@ export class OwnerOrAdminGuard implements CanActivate {
     if (targetUserId && currentUserId && targetUserId === currentUserId) {
       return true;
     }
+
+    this.audit.logUnauthorizedAccess(
+      currentUserId || 'unknown',
+      req.user?.email || 'unknown',
+      `${req.method} ${req.url}`,
+      req.ip,
+    );
 
     this.logger.warn(
       `Access denied: User ${currentUserId} (${req.user?.email}) ` +

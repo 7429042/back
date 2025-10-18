@@ -1,43 +1,69 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
-export class TokensService {
+export class TokensService implements OnModuleInit {
+  private jwtSecret!: string;
+  private jwtExpiresIn!: JwtSignOptions['expiresIn'];
+  private jwtRefreshSecret!: string;
+  private jwtRefreshExpiresIn!: JwtSignOptions['expiresIn'];
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {}
 
-  signAccessToken(payload: { sub: string; email?: string; role?: string }) {
-    const secret = this.configService.get<string>('JWT_SECRET');
-    const expiresIn = this.configService.get<string>(
+  onModuleInit() {
+    this.jwtSecret = this.configService.get<string>('JWT_SECRET')!;
+    this.jwtRefreshSecret =
+      this.configService.get<string>('JWT_REFRESH_SECRET')!;
+
+    if (!this.jwtSecret) throw new Error('JWT_SECRET is not set');
+    if (!this.jwtRefreshSecret)
+      throw new Error('JWT_REFRESH_SECRET is not set');
+
+    this.jwtExpiresIn = this.configService.get<string>(
       'JWT_EXPIRES_IN',
       '1h',
     ) as JwtSignOptions['expiresIn'];
-    if (!secret) throw new Error('JWT_SECRET is not set');
-    return this.jwtService.sign(payload, { secret, expiresIn });
+
+    this.jwtRefreshExpiresIn = this.configService.get<string>(
+      'JWT_REFRESH_EXPIRES_IN',
+      '30d',
+    ) as JwtSignOptions['expiresIn'];
+
+    if (this.configService.get<string>('NODE_ENV') !== 'production') {
+      console.log(
+        `[TokensService] Initialized with TTL: ` +
+          `access=${this.jwtExpiresIn}, refresh=${this.jwtRefreshExpiresIn}`,
+      );
+    }
+  }
+
+  signAccessToken(payload: { sub: string; email?: string; role?: string }) {
+    return this.jwtService.sign(payload, {
+      secret: this.jwtSecret,
+      expiresIn: this.jwtExpiresIn,
+    });
   }
 
   signRefreshToken(
     payload: { sub: string; email?: string; role?: string },
     jti: string,
   ) {
-    const secret = this.configService.get<string>('JWT_REFRESH_SECRET');
-    const expiresIn = this.configService.get<string>(
-      'JWT_REFRESH_EXPIRES_IN',
-      '30d',
-    ) as JwtSignOptions['expiresIn'];
-    if (!secret) throw new Error('JWT_REFRESH_SECRET is not set');
-    return this.jwtService.sign({ ...payload, jti }, { secret, expiresIn });
+    return this.jwtService.sign(
+      { ...payload, jti },
+      { secret: this.jwtRefreshSecret, expiresIn: this.jwtRefreshExpiresIn },
+    );
   }
 
   async verifyRefresh<
     T extends { sub: string; jti?: string; email?: string; role?: string },
   >(token: string) {
-    const secret = this.configService.get<string>('JWT_REFRESH_SECRET');
-    if (!secret) throw new Error('JWT_REFRESH_SECRET is not set');
-    return await this.jwtService.verifyAsync<T>(token, { secret });
+    return await this.jwtService.verifyAsync<T>(token, {
+      secret: this.jwtRefreshSecret,
+    });
   }
 
   private isJwtWithExp(payload: unknown): payload is { exp: number } {

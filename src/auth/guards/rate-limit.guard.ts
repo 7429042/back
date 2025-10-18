@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { SimpleRedisService } from '../../redis/redis.service';
 import { Request, Response } from 'express';
+import { AuditService } from '../services/audit.service';
 
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -16,6 +17,7 @@ export class RateLimitGuard implements CanActivate {
   constructor(
     private readonly config: ConfigService,
     private readonly cache: SimpleRedisService,
+    private readonly audit: AuditService,
   ) {}
 
   private getClientId(req: Request): string {
@@ -65,6 +67,9 @@ export class RateLimitGuard implements CanActivate {
     if (curr > max) {
       res.setHeader('Retry-After', ttl.toString());
       this.logger.warn('Rate limit exceeded for client:', clientId);
+
+      this.audit.logRateLimitExceeded(clientId, path, method);
+
       throw new HttpException(
         'Too many requests',
         HttpStatus.TOO_MANY_REQUESTS,
