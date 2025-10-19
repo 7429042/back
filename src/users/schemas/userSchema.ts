@@ -33,3 +33,16 @@ export class User {
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
+
+UserSchema.index({ role: 1, isBlocked: 1, createdAt: -1 });
+UserSchema.index({ role: 1, isBlocked: 1, updatedAt: -1 });
+UserSchema.index({ role: 1, isBlocked: 1, email: 1 });
+
+UserSchema.index(
+  { email: 'text', firstName: 'text', lastName: 'text' },
+  {
+    name: 'user_search_text',
+    weights: { email: 3, firstName: 2, lastName: 2 },
+    default_language: 'russian',
+  },
+);

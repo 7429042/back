@@ -33,7 +33,7 @@ export class Category {
   slug: string;
 
   @Prop({ required: false, enum: ['ParentCategory', 'Category'], index: true })
-  parentModel: "ParentCategory" | "Category";
+  parentModel: 'ParentCategory' | 'Category';
 
   @Prop({ required: true, index: true })
   path: string;

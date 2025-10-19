@@ -31,7 +31,7 @@ import {
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminCreateUserDto } from './dto/admin-create-user.dto';
-import { ParseObjectIdPipe } from '@nestjs/mongoose';
+import { ParseObjectIdPipe } from '../common/pipes/parse-objectid.pipe';
 
 @Controller('users')
 export class UsersController {

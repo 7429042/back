@@ -7,10 +7,23 @@ import { JwtModule, JwtModuleOptions, JwtSignOptions } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
 import { AuthUtilsService } from '../auth/services/auth-utils';
+import { UserCacheService } from './services/user-cache.service';
+import { UserAvatarService } from './services/user-avatar.service';
+import { UserPasswordService } from './services/user-password.service';
+import { UserAdminService } from './services/user-admin.service';
+import { UserQueryService } from './services/user-query.service';
 
 @Module({
   controllers: [UsersController],
-  providers: [UsersService, AuthUtilsService],
+  providers: [
+    UsersService,
+    AuthUtilsService,
+    UserCacheService,
+    UserAvatarService,
+    UserPasswordService,
+    UserAdminService,
+    UserQueryService,
+  ],
   imports: [
     MongooseModule.forFeature([
       {
