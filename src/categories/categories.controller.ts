@@ -4,6 +4,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -13,7 +15,11 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { CategoriesService } from './categories.service';
+import {
+  CategoriesService,
+  CategoryLean,
+  CategorySearchResult,
+} from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { SearchCategoriesQueryDto } from './dto/search-categories-query.dto';
@@ -27,6 +33,8 @@ import {
   ApiBearerAuth,
   ApiQuery,
   ApiConsumes,
+  ApiOkResponse,
+  ApiCreatedResponse,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { categoriesMulterOptions } from '../common/config/multer.config';
@@ -38,7 +46,8 @@ export class CategoriesController {
 
   @Get()
   @ApiOperation({ summary: 'Список категорий (плоский список дочерних)' })
-  findAll() {
+  @ApiOkResponse({ description: 'Список всех категорий' })
+  async findAll(): Promise<CategoryLean[]> {
     return this.categoriesService.findAll();
   }
 
@@ -55,22 +64,30 @@ export class CategoriesController {
     schema: { type: 'integer', minimum: 1, maximum: 100 },
     description: 'Макс. количество результатов (по умолчанию 20)',
   })
-  search(@Query() query: SearchCategoriesQueryDto) {
+  @ApiOkResponse({ description: 'Результаты поиска' })
+  async search(
+    @Query() query: SearchCategoriesQueryDto,
+  ): Promise<CategorySearchResult[]> {
     return this.categoriesService.search(query.q, query.limit);
   }
 
   @Get('parent-counters')
   @ApiOperation({ summary: 'Счётчики дочерних категорий по 3 родителям' })
-  getParentCounters() {
+  @ApiOkResponse({ description: 'Счётчики для родительских категорий' })
+  async getParentCounters(): Promise<
+    { slug: string; name: string; count: number }[]
+  > {
     return this.categoriesService.getParentsCounters();
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @ApiBearerAuth()
   @Post()
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Создать дочернюю категорию (parentSlug обязателен)',
   })
+  @ApiCreatedResponse({ description: 'Категория успешно создана' })
   @ApiBody({
     type: CreateCategoryDto,
     examples: {
@@ -94,11 +111,12 @@ export class CategoriesController {
       },
     },
   })
-  create(@Body() dto: CreateCategoryDto) {
-    return this.categoriesService.create(dto).then((created) => ({
+  async create(@Body() dto: CreateCategoryDto) {
+    const created = await this.categoriesService.create(dto);
+    return {
       ...(created.toObject?.() ?? created),
-      editRoure: `/admin/categories/${created.slug}/edit`,
-    }));
+      editRoute: `/admin/categories/${created.slug}/edit`,
+    };
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
@@ -107,6 +125,7 @@ export class CategoriesController {
   @ApiOperation({
     summary: 'Идемпотентно создать дочернюю категорию (если нет)',
   })
+  @ApiOkResponse({ description: 'Категория создана или уже существует' })
   @ApiBody({
     type: CreateCategoryDto,
     examples: {
@@ -117,7 +136,7 @@ export class CategoriesController {
       },
     },
   })
-  ensure(@Body() dto: CreateCategoryDto) {
+  async ensure(@Body() dto: CreateCategoryDto): Promise<CategoryLean> {
     return this.categoriesService.ensure(dto);
   }
 
@@ -126,6 +145,7 @@ export class CategoriesController {
   @Put(':slug')
   @ApiOperation({ summary: 'Обновить категорию по слагу' })
   @ApiParam({ name: 'slug' })
+  @ApiOkResponse({ description: 'Категория успешно обновлена' })
   @ApiBody({
     type: UpdateCategoryDto,
     examples: {
@@ -137,30 +157,36 @@ export class CategoriesController {
       },
     },
   })
-  update(@Param('slug') slug: string, @Body() dto: UpdateCategoryDto) {
+  async update(
+    @Param('slug') slug: string,
+    @Body() dto: UpdateCategoryDto,
+  ): Promise<CategoryLean> {
     return this.categoriesService.updateBySlug(slug, dto);
   }
 
   @UseGuards(JwtAuthGuard, AdminGuard)
   @ApiBearerAuth()
   @Delete(':slug')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Удалить категорию и её поддерево по слагу' })
-  @ApiParam({ name: 'slug' })
-  remove(@Param('slug') slug: string) {
+  @ApiParam({ name: 'slug', example: 'svarshchik' })
+  @ApiOkResponse({ description: 'Категория успешно удалена' })
+  async remove(@Param('slug') slug: string): Promise<{ deleted: boolean }> {
     return this.categoriesService.deleteBySlug(slug);
   }
 
   @Get(':slug/ids')
   @ApiOperation({ summary: 'ID категории и всех её потомков' })
-  @ApiParam({ name: 'slug' })
-  getIdsWithDescendants(@Param('slug') slug: string) {
-    return this.categoriesService.collectCategoryAndDescendantsIdsBySlug(slug);
+  @ApiParam({ name: 'slug', example: 'svarshchik' })
+  async getIdsWithDescendants(@Param('slug') slug: string) {
+    return this.categoriesService.collectCategoryAndDescendantsIds(slug);
   }
 
   @Get(':slug')
   @ApiOperation({ summary: 'Получить категорию по слагу' })
-  @ApiParam({ name: 'slug' })
-  getBySlug(@Param('slug') slug: string) {
+  @ApiParam({ name: 'slug', example: 'svarshchik' })
+  @ApiOkResponse({ description: 'Категория найдена' })
+  async getBySlug(@Param('slug') slug: string): Promise<CategoryLean> {
     return this.categoriesService.findBySlug(slug);
   }
 
@@ -168,8 +194,9 @@ export class CategoriesController {
   @ApiBearerAuth()
   @Post(':slug/image')
   @ApiOperation({ summary: 'Загрузить изображение категории' })
-  @ApiParam({ name: 'slug' })
+  @ApiParam({ name: 'slug', example: 'svarshchik' })
   @ApiConsumes('multipart/form-data')
+  @ApiOkResponse({ description: 'Изображение успешно загружено' })
   @ApiBody({
     schema: {
       type: 'object',
@@ -185,7 +212,7 @@ export class CategoriesController {
   async uploadImage(
     @Param('slug') slug: string,
     @UploadedFile() file: Express.Multer.File,
-  ) {
+  ): Promise<{ imageUrl: string }> {
     if (!file) throw new BadRequestException('Файл не загружен');
     return this.categoriesService.setImage(slug, file.filename);
   }
@@ -194,8 +221,11 @@ export class CategoriesController {
   @ApiBearerAuth()
   @Delete(':slug/image')
   @ApiOperation({ summary: 'Удалить изображение категории' })
-  @ApiParam({ name: 'slug' })
-  async deleteImage(@Param('slug') slug: string) {
+  @ApiParam({ name: 'slug', example: 'svarshchik' })
+  @ApiOkResponse({ description: 'Изображение успешно удалено' })
+  async deleteImage(
+    @Param('slug') slug: string,
+  ): Promise<{ success: boolean }> {
     return this.categoriesService.clearImage(slug);
   }
 
@@ -203,8 +233,9 @@ export class CategoriesController {
   @ApiOperation({
     summary: 'Увеличить просмотры и вернуть обновлённую категорию',
   })
-  @ApiParam({ name: 'slug' })
-  async visit(@Param('slug') slug: string) {
+  @ApiParam({ name: 'slug', example: 'svarshchik' })
+  @ApiOkResponse({ description: 'Просмотры успешно увеличены' })
+  async visit(@Param('slug') slug: string): Promise<CategoryLean> {
     return this.categoriesService.incrementViews(slug);
   }
 }

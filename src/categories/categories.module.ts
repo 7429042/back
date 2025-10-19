@@ -8,6 +8,13 @@ import {
   ParentCategory,
   ParentCategorySchema,
 } from './schemas/category.schema';
+import { CategoryCacheService } from './services/category-cache.service';
+import { CategoryQueryService } from './services/category-query.service';
+import { CategoryCrudService } from './services/category-crud.service';
+import { CategoryHierarchyService } from './services/category-hierarchy.service';
+import { CategoryImageService } from './services/category-image.service';
+import { CategoryAnalyticsService } from './services/category-analytics.service';
+import { CategoryUtilsService } from './services/category-utils.service';
 
 @Module({
   imports: [
@@ -23,7 +30,23 @@ import {
     ]),
   ],
   controllers: [CategoriesController],
-  providers: [CategoriesService],
-  exports: [CategoriesService],
+  providers: [
+    CategoriesService,
+    CategoryCacheService,
+    CategoryQueryService,
+    CategoryCrudService,
+    CategoryHierarchyService,
+    CategoryImageService,
+    CategoryAnalyticsService,
+    CategoryUtilsService,
+  ],
+  exports: [
+    CategoryQueryService,
+    CategoryCrudService,
+    CategoryHierarchyService,
+    CategoryAnalyticsService,
+    CategoriesService,
+    CategoryUtilsService,
+  ],
 })
 export class CategoriesModule {}
