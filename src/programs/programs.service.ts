@@ -493,7 +493,7 @@ export class ProgramsService {
       return [];
     }
 
-    const safe = this.escapeRegExp(params.q);
+    const safe = this.escapeRegExp(params.q.toLowerCase());
     const cats: string[] = params.categoryIds
       ? params.categoryIds.map((id) => String(id))
       : [];

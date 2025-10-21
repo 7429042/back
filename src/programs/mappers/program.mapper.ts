@@ -3,8 +3,6 @@ import { ProgramResponseDto } from '../dto/program-response.dto';
 export type AnyProgram = {
   _id: any;
   title?: string;
-  categoryType?: 'dpo' | 'prof_training';
-  dpoSubcategory?: 'pk' | 'pp';
   description?: string;
   category?: any;
   views: number;
@@ -43,8 +41,6 @@ export function mapProgram(src: AnyProgram): ProgramResponseDto {
   return {
     _id: id,
     title: src.title,
-    categoryType: src.categoryType,
-    dpoSubcategory: src.dpoSubcategory,
     description: src.description,
     category,
     views: src.views,

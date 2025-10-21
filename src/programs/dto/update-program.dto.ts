@@ -1,5 +1,4 @@
 import {
-  IsEnum,
   IsInt,
   IsMongoId,
   IsOptional,

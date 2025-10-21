@@ -46,10 +46,9 @@ export class ProgramsController {
   ) {
     let categoryId: Types.ObjectId | undefined;
     if (dto.categorySlug) {
-      const ids =
-        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
-          dto.categorySlug,
-        );
+      const ids = await this.categoriesService.collectCategoryAndDescendantsIds(
+        dto.categorySlug,
+      );
       categoryId = ids[0];
     } else if (dto.categoryId) {
       categoryId = new Types.ObjectId(dto.categoryId);
@@ -112,11 +111,11 @@ export class ProgramsController {
     @Query() query: FindProgramsQueryDto,
     @CurrentUser() user: CurrentUserPayload,
   ) {
-    const isAdmin = user.role === 'admin';
+    const isAdmin = user?.role === 'admin';
     let categoryIds: Types.ObjectId[] | undefined = undefined;
     if (query.categorySlug) {
       categoryIds =
-        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+        await this.categoriesService.collectCategoryAndDescendantsIds(
           query.categorySlug,
         );
     }
@@ -127,6 +126,7 @@ export class ProgramsController {
       categoryIds,
       sort: query.sort,
       order: query.order,
+      text: query.text,
     });
   }
 
@@ -189,7 +189,7 @@ export class ProgramsController {
     let categoryIds: Types.ObjectId[] | undefined = undefined;
     if (query.categorySlug) {
       categoryIds =
-        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+        await this.categoriesService.collectCategoryAndDescendantsIds(
           query.categorySlug,
         );
     }
@@ -273,7 +273,7 @@ export class ProgramsController {
     let categoryIds: Types.ObjectId[] | undefined;
     if (query.categorySlug) {
       categoryIds =
-        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
+        await this.categoriesService.collectCategoryAndDescendantsIds(
           query.categorySlug,
         );
     }
@@ -293,10 +293,9 @@ export class ProgramsController {
   ) {
     let categoryId: Types.ObjectId | undefined;
     if (dto.categorySlug) {
-      const ids =
-        await this.categoriesService.collectCategoryAndDescendantsIdsBySlug(
-          dto.categorySlug,
-        );
+      const ids = await this.categoriesService.collectCategoryAndDescendantsIds(
+        dto.categorySlug,
+      );
       categoryId = ids[0];
     } else if (dto.categoryId) {
       categoryId = new Types.ObjectId(dto.categoryId);
