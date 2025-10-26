@@ -170,4 +170,25 @@ export class SimpleRedisService {
     const payload = JSON.stringify(value, this.jsonReplacer);
     await this.redis.setex(key, Math.floor(ttlSeconds), payload);
   }
+
+  async delByPattern(pattern: string): Promise<number> {
+    try {
+      const keys = await this.redis.keys(pattern);
+      if (keys.length === 0) return 0;
+      await this.redis.del(...keys);
+      return keys.length;
+    } catch (err) {
+      this.logger.error(`Redis delByPattern error: ${err}`);
+      throw err;
+    }
+  }
+
+  async safeDelByPattern(pattern: string): Promise<number> {
+    try {
+      return await this.delByPattern(pattern);
+    } catch (err) {
+      this.logger.warn(`Redis delByPattern error: ${err}`);
+      return 0;
+    }
+  }
 }

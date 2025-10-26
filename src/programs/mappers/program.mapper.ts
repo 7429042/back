@@ -1,10 +1,11 @@
 import { ProgramResponseDto } from '../dto/program-response.dto';
+import { Types } from 'mongoose';
 
 export type AnyProgram = {
-  _id: any;
+  _id: Types.ObjectId | string;
   title?: string;
   description?: string;
-  category?: any;
+  category?: Types.ObjectId | string;
   views: number;
   hours?: number;
   completionDocument?: string;
@@ -12,44 +13,37 @@ export type AnyProgram = {
   status: 'draft' | 'published';
   createdAt?: Date | string;
   updatedAt?: Date | string;
-  [key: string]: unknown;
+  price?: number;
 };
 
+function toObjectIdString(
+  value: Types.ObjectId | string | null | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  return typeof value === 'string' ? value : value.toString();
+}
+
+function toDate(value: Date | string | undefined): Date | undefined {
+  if (!value) return undefined;
+  if (value instanceof Date) return value;
+  if (value) return new Date(value);
+  return undefined;
+}
+
 export function mapProgram(src: AnyProgram): ProgramResponseDto {
-  const id = typeof src._id === 'string' ? src._id : String(src._id);
-  const category =
-    src.category !== null
-      ? typeof src.category === 'string'
-        ? src.category
-        : String(src.category)
-      : undefined;
-
-  const createdAt =
-    src.createdAt instanceof Date
-      ? src.createdAt
-      : typeof src.createdAt === 'string'
-        ? new Date(src.createdAt)
-        : undefined;
-
-  const updatedAt =
-    src.updatedAt instanceof Date
-      ? src.updatedAt
-      : typeof src.updatedAt === 'string'
-        ? new Date(src.updatedAt)
-        : undefined;
-
   return {
-    _id: id,
+    _id: toObjectIdString(src._id) ?? '',
     title: src.title,
     description: src.description,
-    category,
+    category: toObjectIdString(src.category),
     views: src.views,
     hours: src.hours,
     completionDocument: src.completionDocument,
     slug: src.slug,
     status: src.status,
-    createdAt,
-    updatedAt,
+    createdAt: toDate(src.createdAt),
+    updatedAt: toDate(src.updatedAt),
+    price: src.price,
   };
 }
 

@@ -13,19 +13,6 @@ export class ProgramResponseDto {
   })
   title?: string;
 
-  @ApiPropertyOptional({
-    description: 'Тип категории',
-    enum: ['dpo', 'prof_training'],
-  })
-  categoryType?: 'dpo' | 'prof_training';
-
-  @ApiPropertyOptional({
-    description: 'Подкатегория для DPO',
-    enum: ['pk', 'pp'],
-    nullable: true,
-  })
-  dpoSubcategory?: 'pk' | 'pp';
-
   @ApiPropertyOptional({ description: 'Описание программы', nullable: true })
   description?: string;
 
@@ -75,6 +62,13 @@ export class ProgramResponseDto {
     nullable: true,
   })
   updatedAt?: Date;
+
+  @ApiPropertyOptional({
+    description: 'Цена программы',
+    example: 1000,
+    nullable: true,
+  })
+  price?: number;
 }
 
 export class ProgramsSearchResponseDto {

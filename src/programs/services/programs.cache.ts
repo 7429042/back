@@ -38,29 +38,24 @@ export class ProgramsCacheService {
   }
 
   async invalidateLists() {
-    // Идеально — удалить по паттерну. Если в SimpleRedisService нет delByPattern —
-    // можно временно полагаться на TTL. Оставим попытку с паттерном и отлов ошибок.
-    const anyCache = this.cache as any;
-    if (typeof anyCache.delByPattern === 'function') {
-      try {
-        await anyCache.delByPattern('programs:list:*');
-        return;
-      } catch (e) {
-        this.logger.warn(`delByPattern failed: ${e}`);
+    try {
+      const deleted = await this.cache.safeDelByPattern('programs:list:*');
+      if (deleted > 0) {
+        this.logger.log(`Invalidated ${deleted} list cache entries`);
       }
+    } catch (error) {
+      this.logger.warn(`Failed to invalidate list cache: ${error}`);
     }
-    // Фолбэк — ничего не делаем, кэш истечёт по TTL
   }
 
   async invalidateSuggest() {
-    const anyCache = this.cache as any;
-    if (typeof anyCache.delByPattern === 'function') {
-      try {
-        await anyCache.delByPattern('programs:suggest:*');
-        return;
-      } catch (e) {
-        this.logger.warn(`delByPattern failed: ${e}`);
+    try {
+      const deleted = await this.cache.safeDelByPattern('programs:suggest:*');
+      if (deleted > 0) {
+        this.logger.log(`Invalidated ${deleted} suggest cache entries`);
       }
+    } catch (error) {
+      this.logger.warn(`Failed to invalidate suggest cache: ${error}`);
     }
   }
 }
