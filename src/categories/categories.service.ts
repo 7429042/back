@@ -54,8 +54,8 @@ export class CategoriesService implements OnModuleInit {
     try {
       for (const { name, slug } of PARENT_CATEGORIES_LIST) {
         await this.parentCategoryModel.updateOne(
-          { slug },
-          { $setOnInsert: { name, slug } },
+          { $or: [{ slug }, { name }] },
+          { $set: { name, slug } },
           { upsert: true },
         );
       }
