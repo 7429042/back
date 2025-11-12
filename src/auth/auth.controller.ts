@@ -82,8 +82,10 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Get('sessions')
-  async listSessions(@UserId() userId: string) {
-    return await this.authService.listSessions(userId);
+  async listSessions(@UserId() userId: string, @Req() req: Request) {
+    const refreshTokenFromCookie = (req.cookies?.['refresh_token'] ??
+      undefined) as string | undefined;
+    return await this.authService.listSessions(userId, refreshTokenFromCookie);
   }
 
   @UseGuards(JwtAuthGuard)

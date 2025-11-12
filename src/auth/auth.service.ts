@@ -233,9 +233,23 @@ export class AuthService {
     });
   }
 
-  async listSessions(userId: string) {
+  async listSessions(userId: string, refreshTokenFromCookie?: string) {
     const userObjectId = new Types.ObjectId(userId);
     const sessions = await this.sessions.listSessions(userObjectId);
+
+    // Попробуем получить jti текущего refresh токена
+    const decoded = refreshTokenFromCookie
+      ? await this.tokens
+          .verifyRefresh<{
+            jti?: string;
+            sub: string;
+            email?: string;
+            role?: string;
+          }>(refreshTokenFromCookie)
+          .catch(() => null)
+      : null;
+
+    const currentJti = decoded?.jti ?? null;
 
     return {
       data: sessions.map((s) => ({
@@ -244,7 +258,7 @@ export class AuthService {
         expiresAt: s.expiresAt,
         userAgent: s.userAgent,
         ip: s.ip,
-        current: false, // можно доработать, если будете передавать текущий refresh из cookie
+        current: currentJti ? s.jti === currentJti : false,
       })),
     };
   }
